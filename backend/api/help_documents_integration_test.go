@@ -112,7 +112,7 @@ func TestHelpAPIPublicRouteReturnsUserGuidesNotAdminSourceDocs(t *testing.T) {
 
 	data := helpRequest(t, r, "GET", "help/documents", "", 200)
 	body := string(data)
-	for _, marker := range []string{"快速开始：从登录到第一条训练任务", "实验与 MLflow 接入", "https://raytrain.wellspiking.ai/api/v1/mlflow-native", "custom answer"} {
+	for _, marker := range []string{"快速开始：从登录到第一条训练任务", "实验与 MLflow 接入", "https://raytrain.example.com/api/v1/mlflow-native", "custom answer"} {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("public help response is missing %q: %s", marker, body)
 		}
@@ -151,7 +151,7 @@ func TestHelpAPIArticlesRealStoreReturnsQuestionDocuments(t *testing.T) {
 		`"legacyAnchors":[`,
 		`"sectionId":"section-常见错误速查"`,
 		`"topicId":"training-guide"`,
-		`https://raytrain.wellspiking.ai/api/v1/mlflow-native`,
+		`https://raytrain.example.com/api/v1/mlflow-native`,
 	} {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("help articles response is missing %q: %s", marker, body)

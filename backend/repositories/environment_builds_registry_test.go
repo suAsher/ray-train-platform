@@ -50,7 +50,7 @@ func assertEnvironmentAuthorizationHostPersistence(t *testing.T, repo *GormRepos
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	for _, host := range []string{"", "harbor.qomolo.com"} {
+	for _, host := range []string{"", "registry-secondary.example.com"} {
 		a := eb.Authorization{ID: "auth-" + host, TenantID: "team-a", OwnerID: "user-a", Username: "registry-user", RegistryHost: host, SecretRef: "test-material", ExpiresAt: now.Add(time.Hour), CreatedAt: now}
 		if err := repo.SaveEnvironmentAuthorization(ctx, a); err != nil {
 			t.Fatal(err)
@@ -60,7 +60,7 @@ func assertEnvironmentAuthorizationHostPersistence(t *testing.T, repo *GormRepos
 			t.Fatalf("authorization host = %q, want %q; error = %v", stored.RegistryHost, a.Host(), err)
 		}
 		changed := stored
-		changed.RegistryHost = "harbor.qomolo.com"
+		changed.RegistryHost = "registry-secondary.example.com"
 		if host != "" {
 			changed.RegistryHost = ""
 		}
@@ -86,7 +86,7 @@ func assertEnvironmentAuthorizationHostPersistence(t *testing.T, repo *GormRepos
 func registryPersistenceBuild(host string) eb.Build {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	digest := "sha256:" + strings.Repeat("3", 64)
-	return eb.Build{ID: "env-registry", TenantID: "team-a", OwnerID: "user-a", WorkspaceID: "workspace-a", Namespace: "tenant-a", WorkspaceResourceName: "ws", WorkspaceUID: "uid", BaseImage: "harbor.wellspiking.ai/public/base@" + digest, WorkspaceImage: "harbor.wellspiking.ai/public/debug@" + digest, Name: "Environment", Visibility: "personal", RegistryHost: host, Project: "public", Repository: "environment", Tag: "env-registry", Status: eb.Queued, IdempotencyKey: "registry-request", Attempt: 1, ArtifactExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}
+	return eb.Build{ID: "env-registry", TenantID: "team-a", OwnerID: "user-a", WorkspaceID: "workspace-a", Namespace: "tenant-a", WorkspaceResourceName: "ws", WorkspaceUID: "uid", BaseImage: "registry.example.com/public/base@" + digest, WorkspaceImage: "registry.example.com/public/debug@" + digest, Name: "Environment", Visibility: "personal", RegistryHost: host, Project: "public", Repository: "environment", Tag: "env-registry", Status: eb.Queued, IdempotencyKey: "registry-request", Attempt: 1, ArtifactExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}
 }
 
 func assertEnvironmentBuildHostPersistence(t *testing.T, repo *GormRepository) {
@@ -94,21 +94,21 @@ func assertEnvironmentBuildHostPersistence(t *testing.T, repo *GormRepository) {
 	ctx := context.Background()
 	b := registryPersistenceBuild("")
 	stored, err := repo.CreateEnvironmentBuild(ctx, b)
-	if err != nil || stored.RegistryHost != "harbor.wellspiking.ai" {
+	if err != nil || stored.RegistryHost != "registry.example.com" {
 		t.Fatalf("build default host = %q; error = %v", stored.RegistryHost, err)
 	}
 	duplicate := b
-	duplicate.RegistryHost = "harbor.wellspiking.ai"
+	duplicate.RegistryHost = "registry.example.com"
 	if got, err := repo.CreateEnvironmentBuild(ctx, duplicate); err != nil || got.ID != b.ID {
 		t.Fatalf("legacy/default idempotency rejected: %v", err)
 	}
 	changed := b
-	changed.RegistryHost = "harbor.qomolo.com"
+	changed.RegistryHost = "registry-secondary.example.com"
 	if _, err = repo.CreateEnvironmentBuild(ctx, changed); !errors.Is(err, eb.ErrConflict) {
 		t.Fatalf("cross-registry idempotency accepted: %v", err)
 	}
 	// A second request may use the same repository in the other Harbor.
-	changed.ID, changed.Tag, changed.IdempotencyKey = "env-qomolo", "env-qomolo", "qomolo-request"
+	changed.ID, changed.Tag, changed.IdempotencyKey = "env-secondary", "env-secondary", "secondary-request"
 	if got, err := repo.CreateEnvironmentBuild(ctx, changed); err != nil || got.RegistryHost != changed.RegistryHost {
 		t.Fatalf("second Harbor persistence failed: %v", err)
 	}
@@ -123,7 +123,7 @@ func assertEnvironmentBuildHostPersistence(t *testing.T, repo *GormRepository) {
 			t.Fatalf("claimed unexpected build %q", claimed.ID)
 		}
 		invalid := *claimed
-		invalid.RegistryHost = "harbor.qomolo.com"
+		invalid.RegistryHost = "registry-secondary.example.com"
 		if claimed.RegistryHost == invalid.RegistryHost {
 			invalid.RegistryHost = ""
 		}
@@ -150,7 +150,7 @@ func assertEnvironmentBuildHostPersistence(t *testing.T, repo *GormRepository) {
 func assertEnvironmentFinalizedImageHostPersistence(t *testing.T, repo *GormRepository) {
 	t.Helper()
 	ctx := context.Background()
-	b := registryPersistenceBuild("harbor.qomolo.com")
+	b := registryPersistenceBuild("registry-secondary.example.com")
 	b.Status, b.ImageDigest = eb.VerifyingPull, "sha256:"+strings.Repeat("3", 64)
 	b.ImageReference = b.Host() + "/public/environment@" + b.ImageDigest
 	if _, err := repo.CreateEnvironmentBuild(ctx, b); err != nil {
@@ -163,7 +163,7 @@ func assertEnvironmentFinalizedImageHostPersistence(t *testing.T, repo *GormRepo
 	ready := *claimed
 	ready.Status, ready.ImageID = eb.Ready, "image-registry"
 	invalid := ready
-	invalid.RegistryHost = "harbor.wellspiking.ai"
+	invalid.RegistryHost = "registry.example.com"
 	invalid.ImageReference = invalid.Host() + "/public/environment@" + invalid.ImageDigest
 	if err = repo.FinalizeEnvironmentBuild(ctx, invalid, "finalizer"); !errors.Is(err, eb.ErrConflict) {
 		t.Fatalf("finalize replaced selected Harbor: %v", err)

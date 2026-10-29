@@ -88,7 +88,6 @@ type SubmissionServiceOptions struct {
 	DataSpaces               DataSpaceStore
 	DataSpacesEnabled        bool
 	DataSpacesPublicRoot     string
-	IDCDataSpacesEnabled     bool
 	WorkspaceSnapshots       WorkspaceSnapshotLookup
 	Datasets                 DatasetCatalogStore
 	DatasetVersioningEnabled bool
@@ -123,7 +122,6 @@ type SubmissionService struct {
 	dataSpaces               DataSpaceStore
 	dataSpacesEnabled        bool
 	dataSpacesPublicRoot     string
-	idcDataSpacesEnabled     bool
 	workspaceSnapshots       WorkspaceSnapshotLookup
 	datasets                 DatasetCatalogStore
 	datasetVersioningEnabled bool
@@ -211,7 +209,6 @@ func NewSubmissionService(repository JobRepository, options SubmissionServiceOpt
 		dataSpaces:               options.DataSpaces,
 		dataSpacesEnabled:        options.DataSpacesEnabled,
 		dataSpacesPublicRoot:     strings.TrimSpace(options.DataSpacesPublicRoot),
-		idcDataSpacesEnabled:     options.IDCDataSpacesEnabled,
 		workspaceSnapshots:       options.WorkspaceSnapshots,
 		datasets:                 options.Datasets,
 		datasetVersioningEnabled: options.DatasetVersioningEnabled,
@@ -770,7 +767,7 @@ func (service *SubmissionService) resolveLogicalDataMounts(ctx context.Context, 
 	if !hasLogicalLocations(spec) {
 		return domain.ResolvedDataSpaceMounts{}, nil
 	}
-	if !service.dataSpacesEnabled && !service.idcDataSpacesEnabled {
+	if !service.dataSpacesEnabled {
 		return domain.ResolvedDataSpaceMounts{}, ErrSubmissionDataMountNotReady
 	}
 	if service.dataSpaces == nil {
@@ -811,7 +808,7 @@ func (service *SubmissionService) resolveLogicalDataMounts(ctx context.Context, 
 func (service *SubmissionService) dataSpaceMountingEnabled(space domain.DataSpaceID) bool {
 	switch space {
 	case domain.DataSpaceIDCOriginal, domain.DataSpaceIDCWellspiking, domain.DataSpaceIDCShared, domain.DataSpaceIDCSPKHybrid, domain.DataSpaceIDCSPKSSD:
-		return service.idcDataSpacesEnabled
+		return false
 	default:
 		return service.dataSpacesEnabled
 	}
@@ -834,7 +831,7 @@ func bindingVisibleToPrincipal(binding domain.DataMountBinding, principal auth.P
 	switch binding.Scope {
 	case domain.DataMountScopePersonal:
 		return binding.TenantID == principal.TenantID && binding.UserID == principal.Subject && binding.SpaceID == domain.DataSpaceWorkspace
-	case domain.DataMountScopeTenant, domain.DataMountScopeIDC:
+	case domain.DataMountScopeTenant:
 		return binding.TenantID == principal.TenantID && binding.UserID == ""
 	default:
 		return false
@@ -902,7 +899,7 @@ func mountForPath(mount *domain.ResolvedDataMount, path string) *domain.Resolved
 }
 
 func (service *SubmissionService) resolveDataSpaceRoots(ctx context.Context, principal auth.Principal) (domain.ResolvedDataSpaceRoots, error) {
-	if service.dataSpaces == nil || (!service.dataSpacesEnabled && !service.idcDataSpacesEnabled) {
+	if service.dataSpaces == nil || (!service.dataSpacesEnabled) {
 		return domain.ResolvedDataSpaceRoots{}, nil
 	}
 	bindings, err := service.dataSpaces.ListDataBindings(ctx, principal.TenantID, principal.Subject)
@@ -947,10 +944,6 @@ func (service *SubmissionService) resolveDataSpaceRoots(ctx context.Context, pri
 	}
 	roots := domain.ResolvedDataSpaceRoots{
 		Personal: root(domain.DataSpaceWorkspace, false), Team: root(domain.DataSpaceTeamShared, false), Public: root(domain.DataSpacePublic, true),
-		IDCOriginal: root(domain.DataSpaceIDCOriginal, true), IDCWellspiking: root(domain.DataSpaceIDCWellspiking, true), IDCShared: root(domain.DataSpaceIDCShared, true), IDCSPKHybrid: root(domain.DataSpaceIDCSPKHybrid, true), IDCSPKSSD: root(domain.DataSpaceIDCSPKSSD, true),
-	}
-	if service.idcDataSpacesEnabled && (roots.IDCOriginal == nil || roots.IDCWellspiking == nil || roots.IDCShared == nil || roots.IDCSPKHybrid == nil || roots.IDCSPKSSD == nil) {
-		return domain.ResolvedDataSpaceRoots{}, ErrSubmissionDataMountNotReady
 	}
 	if err := roots.Validate(); err != nil {
 		return domain.ResolvedDataSpaceRoots{}, ErrSubmissionDataMountNotReady

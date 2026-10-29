@@ -19,7 +19,6 @@ func TestHelpArticleMetadataCoversUserSeedDocuments(t *testing.T) {
 	adminOnly := map[string]bool{
 		"admin-node-onboarding": true,
 		"admin-team-retirement": true,
-		"idc-sync-lifecycle":    true,
 	}
 	seenCategories := map[string]bool{}
 	for _, source := range seed {

@@ -58,7 +58,7 @@ func TestSubmittedAcceleratorClassOverridesOnlyAcceleratorSelector(t *testing.T)
 	job := validRenderJob()
 	job.Spec.AcceleratorClass = domain.AcceleratorA100
 	options := testRenderOptions()
-	options.NodeSelector = map[string]string{"accelerator": "nvidia-rtx-4090", "platform.wellspiking.ai/gpu-pool": "production"}
+	options.NodeSelector = map[string]string{"accelerator": "nvidia-rtx-4090", "raytrain.io/gpu-pool": "production"}
 	manifest, err := RenderRayJob(job, options)
 	if err != nil {
 		t.Fatalf("render A100 job: %v", err)
@@ -67,7 +67,7 @@ func TestSubmittedAcceleratorClassOverridesOnlyAcceleratorSelector(t *testing.T)
 	worker := groups[0].(map[string]any)
 	template := worker["template"].(map[string]any)
 	selector := selectorOf(template["spec"].(map[string]any))
-	if selector["accelerator"] != "nvidia-a100" || selector["platform.wellspiking.ai/gpu-pool"] != "production" {
+	if selector["accelerator"] != "nvidia-a100" || selector["raytrain.io/gpu-pool"] != "production" {
 		t.Fatalf("unexpected A100 selector: %#v", selector)
 	}
 }

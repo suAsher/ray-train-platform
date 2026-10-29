@@ -12,7 +12,7 @@ import (
 	"ray-train-platform-backend/registryauth"
 )
 
-const qomoloTestHost = "harbor.qomolo.com"
+const secondaryTestHost = "registry-secondary.example.com"
 
 type multiRegistryRecorder struct {
 	Registry
@@ -83,7 +83,7 @@ func multiRegistryFixture(t *testing.T) (*Service, *multiRegistryStore, *multiRe
 	registry := &multiRegistryRecorder{}
 	multiRunner := &multiRegistryRunner{lifecycleRunner: runner, image: base.config.WorkspaceImage}
 	config := base.config
-	config.RegistryHosts = []string{RegistryHost, qomoloTestHost}
+	config.RegistryHosts = []string{RegistryHost, secondaryTestHost}
 	s, err := NewService(store, multiRunner, registry, &multiRegistryVault{values: map[string][]byte{}}, config)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestRegistryCapabilitiesAreExplicitAndDefaultCompatible(t *testing.T) {
 	if json.Unmarshal(raw, &result) != nil || result.RegistryHost != RegistryHost || len(result.Registries) != 2 {
 		t.Fatalf("unexpected capabilities: %s", raw)
 	}
-	for i, want := range []string{"cli_secret", "password"} {
+	for i, want := range []string{"password", "password"} {
 		item := result.Registries[i]
 		if item.CredentialType != want || item.Label == "" || item.CredentialLabel == "" || item.CredentialHint == "" {
 			t.Fatalf("incomplete registry metadata: %+v", item)
@@ -124,10 +124,10 @@ func TestRegistryCapabilitiesAreExplicitAndDefaultCompatible(t *testing.T) {
 	if (Build{}).Host() != RegistryHost || (Authorization{}).Host() != RegistryHost || (Build{Project: "p", Repository: "r", Tag: "t"}).Target() != RegistryHost+"/p/r:t" {
 		t.Fatal("legacy host default changed")
 	}
-	if (Build{RegistryHost: qomoloTestHost, Project: "p", Repository: "r", Tag: "t"}).Target() != qomoloTestHost+"/p/r:t" {
+	if (Build{RegistryHost: secondaryTestHost, Project: "p", Repository: "r", Tag: "t"}).Target() != secondaryTestHost+"/p/r:t" {
 		t.Fatal("selected registry missing from target")
 	}
-	for _, hosts := range [][]string{{"evil.invalid"}, {"https://" + qomoloTestHost}, {qomoloTestHost + ":443"}, {RegistryHost, RegistryHost}, {""}} {
+	for _, hosts := range [][]string{ {"https://" + secondaryTestHost}, {secondaryTestHost + ":443"}, {RegistryHost, RegistryHost}, {""}} {
 		config := s.config
 		config.RegistryHosts = hosts
 		if _, err := NewService(s.store, s.runner, s.registry, s.vault, config); !errors.Is(err, ErrInvalid) {
@@ -142,7 +142,7 @@ func TestRegistryCapabilitiesAreExplicitAndDefaultCompatible(t *testing.T) {
 func TestAuthorizationSelectedHostRoutingAndInputRejection(t *testing.T) {
 	ctx := context.Background()
 	owner := Owner{TenantID: "team", UserID: "owner"}
-	for _, host := range []string{"", RegistryHost, qomoloTestHost} {
+	for _, host := range []string{"", RegistryHost, secondaryTestHost} {
 		s, _, registry, _ := multiRegistryFixture(t)
 		a, err := s.CreateAuthorizationForRegistry(ctx, owner, host, Credentials{Username: "person", Secret: "fixture-only"})
 		if err != nil {
@@ -170,7 +170,7 @@ func TestAuthorizationSelectedHostRoutingAndInputRejection(t *testing.T) {
 			}
 		}
 	}
-	for _, host := range []string{"evil.invalid", "https://" + qomoloTestHost, qomoloTestHost + "/path", " " + qomoloTestHost, "HARBOR.QOMOLO.COM", qomoloTestHost + ":443"} {
+	for _, host := range []string{"evil.invalid", "https://" + secondaryTestHost, secondaryTestHost + "/path", " " + secondaryTestHost, "REGISTRY-SECONDARY.EXAMPLE.COM", secondaryTestHost + ":443"} {
 		s, _, registry, _ := multiRegistryFixture(t)
 		if _, err := s.CreateAuthorizationForRegistry(ctx, owner, host, Credentials{Username: "person", Secret: "fixture"}); !errors.Is(err, ErrInvalid) || len(registry.hosts) != 0 {
 			t.Fatalf("untrusted registry accepted: %q", host)
@@ -178,7 +178,7 @@ func TestAuthorizationSelectedHostRoutingAndInputRejection(t *testing.T) {
 	}
 	s, _, registry, _ := multiRegistryFixture(t)
 	s.config.RegistryHosts = []string{RegistryHost}
-	if _, err := s.CreateAuthorizationForRegistry(ctx, owner, qomoloTestHost, Credentials{Username: "person", Secret: "fixture"}); !errors.Is(err, ErrInvalid) || len(registry.hosts) != 0 {
+	if _, err := s.CreateAuthorizationForRegistry(ctx, owner, secondaryTestHost, Credentials{Username: "person", Secret: "fixture"}); !errors.Is(err, ErrInvalid) || len(registry.hosts) != 0 {
 		t.Fatal("disabled registry received credentials")
 	}
 }
@@ -195,7 +195,7 @@ func TestCredentialCipherBindsRegistryAndPreservesLegacyAAD(t *testing.T) {
 	if !bytes.Equal(oldAAD, authorizationAAD(explicit)) {
 		t.Fatal("persisted legacy cipher no longer decryptable")
 	}
-	for _, host := range []string{RegistryHost, qomoloTestHost} {
+	for _, host := range []string{RegistryHost, secondaryTestHost} {
 		a := legacy
 		a.RegistryHost = host
 		sealed, err := s.encrypt(a, Credentials{Username: a.Username, Secret: "fixture"})
@@ -203,8 +203,8 @@ func TestCredentialCipherBindsRegistryAndPreservesLegacyAAD(t *testing.T) {
 			t.Fatal(err)
 		}
 		changed := a
-		changed.RegistryHost = qomoloTestHost
-		if host == qomoloTestHost {
+		changed.RegistryHost = secondaryTestHost
+		if host == secondaryTestHost {
 			changed.RegistryHost = RegistryHost
 		}
 		if _, err = s.decryptCredential(changed, sealed); !errors.Is(err, ErrAuthorization) {
@@ -217,7 +217,7 @@ func TestBuildCreationRequiresExplicitMatchingHostAndHostScopedIdempotency(t *te
 	ctx := context.Background()
 	owner := Owner{TenantID: "team", UserID: "owner"}
 	s, _, registry, _ := multiRegistryFixture(t)
-	a, err := s.CreateAuthorizationForRegistry(ctx, owner, qomoloTestHost, Credentials{Username: "person", Secret: "fixture"})
+	a, err := s.CreateAuthorizationForRegistry(ctx, owner, secondaryTestHost, Credentials{Username: "person", Secret: "fixture"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,9 +225,9 @@ func TestBuildCreationRequiresExplicitMatchingHostAndHostScopedIdempotency(t *te
 	if _, err = s.Create(ctx, owner, "workspace", req); !errors.Is(err, ErrConflict) || len(registry.hosts) != 1 {
 		t.Fatal("Qomolo authorization silently selected target for legacy request")
 	}
-	req.RegistryHost = qomoloTestHost
+	req.RegistryHost = secondaryTestHost
 	b, err := s.Create(ctx, owner, "workspace", req)
-	if err != nil || b.RegistryHost != qomoloTestHost {
+	if err != nil || b.RegistryHost != secondaryTestHost {
 		t.Fatalf("selected registry build failed: %+v %v", b, err)
 	}
 	if again, err := s.Create(ctx, owner, "workspace", req); err != nil || again.ID != b.ID {
@@ -247,7 +247,7 @@ func TestRetryRejectsCrossRegistryAuthorizationBeforeAndAfterPush(t *testing.T) 
 	for _, published := range []bool{false, true} {
 		s, store, registry, _ := multiRegistryFixture(t)
 		owner := Owner{TenantID: "team", UserID: "owner"}
-		a, err := s.CreateAuthorizationForRegistry(context.Background(), owner, qomoloTestHost, Credentials{Username: "person", Secret: "fixture"})
+		a, err := s.CreateAuthorizationForRegistry(context.Background(), owner, secondaryTestHost, Credentials{Username: "person", Secret: "fixture"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -268,12 +268,12 @@ func TestPublishedQomoloRetryKeepsHostWithoutLiveAuthorization(t *testing.T) {
 		s, store, registry, _ := multiRegistryFixture(t)
 		now := s.now()
 		store.build.Status = Failed
-		store.build.RegistryHost = qomoloTestHost
+		store.build.RegistryHost = secondaryTestHost
 		store.build.ImageDigest = "sha256:" + strings.Repeat("3", 64)
 		store.build.CleanedAt = &now
 		store.authorizationError = ErrNotFound
 		b, err := s.Retry(context.Background(), Owner{TenantID: "team", UserID: "owner"}, store.build.ID, authID)
-		if err != nil || !store.retried || b.Host() != qomoloTestHost || len(registry.hosts) != 0 {
+		if err != nil || !store.retried || b.Host() != secondaryTestHost || len(registry.hosts) != 0 {
 			t.Fatalf("verification retry changed registry or required credentials: %+v %v", b, err)
 		}
 	}
@@ -282,11 +282,11 @@ func TestPublishedQomoloRetryKeepsHostWithoutLiveAuthorization(t *testing.T) {
 func TestPushReconcileKeepsRegistryBindingAndImageReference(t *testing.T) {
 	for _, mismatch := range []bool{false, true} {
 		s, store, registry, runner := multiRegistryFixture(t)
-		a, err := s.CreateAuthorizationForRegistry(context.Background(), Owner{TenantID: "team", UserID: "owner"}, qomoloTestHost, Credentials{Username: "person", Secret: "fixture"})
+		a, err := s.CreateAuthorizationForRegistry(context.Background(), Owner{TenantID: "team", UserID: "owner"}, secondaryTestHost, Credentials{Username: "person", Secret: "fixture"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		store.build.RegistryHost = qomoloTestHost
+		store.build.RegistryHost = secondaryTestHost
 		store.build.AuthID = a.ID
 		if _, err = s.bindAuthorization(context.Background(), Owner{TenantID: "team", UserID: "owner"}, a.ID, store.build); err != nil {
 			t.Fatal(err)
@@ -303,7 +303,7 @@ func TestPushReconcileKeepsRegistryBindingAndImageReference(t *testing.T) {
 			if store.build.Status != AwaitingAuth || runner.steps != 0 || len(registry.hosts) != before {
 				t.Fatal("cross-registry push was attempted")
 			}
-		} else if store.build.Status != VerifyingPull || !strings.HasPrefix(store.build.ImageReference, qomoloTestHost+"/") || registry.hosts[len(registry.hosts)-1] != qomoloTestHost {
+		} else if store.build.Status != VerifyingPull || !strings.HasPrefix(store.build.ImageReference, secondaryTestHost+"/") || registry.hosts[len(registry.hosts)-1] != secondaryTestHost {
 			t.Fatalf("wrong published reference: %+v", store.build)
 		}
 	}
@@ -316,14 +316,14 @@ func TestHarborRegistryClientSelectionKeepsLegacyClientBoundToItsHost(t *testing
 	if err != nil || selected != legacy || selected.Host() != RegistryHost {
 		t.Fatal("legacy injected client was not reused")
 	}
-	selected, err = adapter.clientForHost(qomoloTestHost)
-	if err != nil || selected == legacy || selected.Host() != qomoloTestHost {
+	selected, err = adapter.clientForHost(secondaryTestHost)
+	if err != nil || selected == legacy || selected.Host() != secondaryTestHost {
 		t.Fatal("Wellspiking client reused for Qomolo credentials")
 	}
-	qomolo := selected
-	adapter.Client = qomolo
+	secondary := selected
+	adapter.Client = secondary
 	selected, err = adapter.clientForHost(RegistryHost)
-	if err != nil || selected == qomolo || selected.Host() != RegistryHost {
+	if err != nil || selected == secondary || selected.Host() != RegistryHost {
 		t.Fatal("Qomolo client reused for Wellspiking credentials")
 	}
 	if _, err = adapter.clientForHost("evil.invalid"); err == nil {

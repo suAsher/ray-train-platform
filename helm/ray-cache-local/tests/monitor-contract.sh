@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly chart_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly production_values="${chart_dir}/values-vke-production.yaml"
+readonly production_values="${chart_dir}/values-example-production.yaml"
 
 "${chart_dir}/tests/collector-contract.sh"
 
@@ -49,7 +49,7 @@ reject "${default_rendered}" 'kind: PrometheusRule'
 require 'kind: DaemonSet'
 require 'name: ray-cache-local-monitor'
 require 'accelerator: nvidia-rtx-4090'
-require 'platform.wellspiking.ai/gpu-pool: production'
+require 'raytrain.io/gpu-pool: production'
 require 'hostPath:'
 require 'path: /data1/ray-cache'
 require 'path: /data2/ray-cache'
@@ -66,8 +66,8 @@ require 'cpu: 25m'
 require 'memory: 32Mi'
 require 'cpu: 50m'
 require 'memory: 64Mi'
-require 'harbor.wellspiking.ai/guofeng.su/node-exporter@sha256:8c9bac11973b94b59be88d6e11fee4429aa743c8846cdc75d65b18db33f6a106'
-require 'harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4'
+require 'quay.io/prometheus/node-exporter:v1.9.1'
+require 'docker.io/library/busybox:1.36.1'
 require 'value: "30"'
 require 'sleep "${interval_seconds}"'
 require 'ray_cache_filesystem_size_bytes'

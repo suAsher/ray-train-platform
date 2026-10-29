@@ -1,0 +1,22 @@
+fullnameOverride: ray-cache-local-data1
+
+storageClass:
+  name: ray-cache-local-data1
+  provisioner: raytrain.io/local-path-data1
+  reclaimPolicy: Delete
+  volumeBindingMode: WaitForFirstConsumer
+  allowVolumeExpansion: false
+
+nodePathMap:
+  - node: "gpu-node-a"
+    paths: [/data1/ray-cache]
+  - node: "gpu-node-b"
+    paths: [/data1/ray-cache]
+
+cache:
+  allowedRoots: [/data1/ray-cache]
+
+# The retained legacy release already exports metrics for both cache roots.
+# Enable monitoring here only when that compatibility release is retired.
+monitoring:
+  enabled: false

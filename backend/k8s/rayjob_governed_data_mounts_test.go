@@ -15,8 +15,8 @@ func TestRenderRayJobMountsResolvedDataSpacesWithoutWorkloadCredentials(t *testi
 			ClaimName: "data-team-a", SubPath: "datasets/v1", MountPath: domain.DataMountInputPath, ReadOnly: true,
 		},
 		Checkpoint: &domain.ResolvedDataMount{
-			Space: domain.DataSpaceIDCOriginal, BindingSpace: domain.DataSpaceIDCOriginal,
-			ClaimName: "idc-original-ro", SubPath: "models/base", MountPath: domain.DataMountCheckpointPath, ReadOnly: true,
+			Space: domain.DataSpacePublic, BindingSpace: domain.DataSpacePublic,
+			ClaimName: "data-public-ro", SubPath: "models/base", MountPath: domain.DataMountCheckpointPath, ReadOnly: true,
 		},
 		Output: &domain.ResolvedDataMount{
 			Space: domain.DataSpaceMyRuns, BindingSpace: domain.DataSpaceWorkspace,
@@ -27,11 +27,9 @@ func TestRenderRayJobMountsResolvedDataSpacesWithoutWorkloadCredentials(t *testi
 		Personal:    &domain.ResolvedDataRoot{Space: domain.DataSpaceWorkspace, ClaimName: "data-user-01"},
 		Team:        &domain.ResolvedDataRoot{Space: domain.DataSpaceTeamShared, ClaimName: "data-team-a", ReadOnly: true},
 		Public:      &domain.ResolvedDataRoot{Space: domain.DataSpacePublic, ClaimName: "data-public", ReadOnly: true},
-		IDCOriginal: &domain.ResolvedDataRoot{Space: domain.DataSpaceIDCOriginal, ClaimName: "idc-original-ro", ReadOnly: true},
 	}
 
 	options := testRenderOptions()
-	options.IDCExistingClaim = "legacy-idc-rwx"
 	manifest, err := RenderRayJob(job, options)
 	if err != nil {
 		t.Fatal(err)
@@ -57,9 +55,8 @@ func TestRenderRayJobMountsResolvedDataSpacesWithoutWorkloadCredentials(t *testi
 		assertStorageMount(t, pod, "platform-data-personal", "data-user-01", domain.MyStorageMountPath, false)
 		assertStorageMount(t, pod, "platform-data-team", "data-team-a", domain.TeamStorageMountPath, true)
 		assertStorageMount(t, pod, "platform-data-public", "data-public", domain.PublicStorageMountPath, true)
-		assertStorageMount(t, pod, "platform-data-idc-original", "idc-original-ro", domain.IDCOriginalMountPath, true)
 		assertGovernedDataMount(t, pod, "platform-data-input", "data-team-a", domain.DataMountInputPath, "datasets/v1", true)
-		assertGovernedDataMount(t, pod, "platform-data-checkpoint", "idc-original-ro", domain.DataMountCheckpointPath, "models/base", true)
+		assertGovernedDataMount(t, pod, "platform-data-checkpoint", "data-public-ro", domain.DataMountCheckpointPath, "models/base", true)
 		assertGovernedDataMount(t, pod, "platform-data-output", "data-user-01", domain.DataMountOutputPath, "runs/job-01", false)
 		env := podEnvironment(pod)
 		for key, want := range map[string]string{
@@ -81,7 +78,7 @@ func TestRenderRayJobMountsResolvedDataSpacesWithoutWorkloadCredentials(t *testi
 			t.Fatalf("%s pod must not retain the legacy IDC mount when governed IDC roots are available: %#v", name, pod)
 		}
 	}
-	if rendered := fmt.Sprintf("%#v", submitter); rendered == "" || containsAny(rendered, "data-team-a", "data-user-01", "idc-original-ro") {
+	if rendered := fmt.Sprintf("%#v", submitter); rendered == "" || containsAny(rendered, "data-team-a", "data-user-01", "data-public-ro") {
 		t.Fatalf("submitter must not mount business data: %s", rendered)
 	}
 }
@@ -164,7 +161,6 @@ func TestRenderRayJobMaterializesWorkspaceSnapshotFromOwnerScopedPersonalPVC(t *
 		Personal: &domain.ResolvedDataRoot{Space: domain.DataSpaceWorkspace, ClaimName: "data-user-a"},
 	}
 	options := testRenderOptions()
-	options.IDCExistingClaim = "legacy-idc-rwx"
 	manifest, err := RenderRayJob(job, options)
 	if err != nil {
 		t.Fatal(err)

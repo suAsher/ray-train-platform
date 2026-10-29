@@ -57,7 +57,7 @@
       </div>
 
       <div v-if="!selectedSpace.browseEnabled" class="mt-6 rounded-xl border border-dashed border-slate-700 bg-slate-950/40 p-5 text-sm leading-6 text-slate-400">
-        该 IDC 数据空间不通过网页枚举目录；管理员配置完成后，在 GPU 调试环境中会以 <code>{{ selectedSpace.mountPath }}</code> 只读可见。
+        该数据空间不支持网页目录浏览；挂载就绪后可在调试环境中通过 <code>{{ selectedSpace.mountPath }}</code> 只读可见。
       </div>
       <template v-else>
         <el-alert v-if="!storageReady(selectedSpace)" class="mt-6" type="warning" :closable="false">
@@ -129,8 +129,8 @@
     </section>
 
     <section class="grid gap-4 rounded-2xl border border-blue-900/60 bg-blue-950/20 p-6 md:grid-cols-3">
-      <div><p class="font-semibold text-blue-100">1. 准备代码与数据</p><p class="mt-2 text-xs leading-5 text-slate-400">在“我的工作区”上传或同步代码；将个人数据上传到“我的文件”，团队、公共和 IDC 数据可选作只读输入。</p></div>
-      <div><p class="font-semibold text-blue-100">2. 在 GPU 调试环境验证</p><p class="mt-2 text-xs leading-5 text-slate-400">调试环境中个人工作区可写，团队、公共和 IDC 数据只读；可在工作区创建持久化 <code>.venv</code>，无需配置对象存储凭据。</p></div>
+      <div><p class="font-semibold text-blue-100">1. 准备代码与数据</p><p class="mt-2 text-xs leading-5 text-slate-400">在“我的工作区”上传或同步代码；将个人数据上传到“我的文件”，团队和公共数据可选作只读输入。</p></div>
+      <div><p class="font-semibold text-blue-100">2. 在 GPU 调试环境验证</p><p class="mt-2 text-xs leading-5 text-slate-400">调试环境中个人工作区可写，团队和公共数据只读；可在工作区创建持久化 <code>.venv</code>，无需配置对象存储凭据。</p></div>
       <div><p class="font-semibold text-blue-100">3. 固化代码并提交训练</p><p class="mt-2 text-xs leading-5 text-slate-400">在“我的工作区”创建不可变代码版本；新建任务选择该版本、镜像与 1/8/16 卡资源。脚本通过 <code>PLATFORM_DATASET_PATH</code> 读取数据，通过 <code>PLATFORM_OUTPUT_PATH</code> 写入结果。</p></div>
     </section>
 
@@ -182,7 +182,7 @@ const uploadPercentage = computed(() => {
 })
 const visibleSpaces = computed(() => dataPageSpaces(spaces.value))
 
-const statusLabel = (space) => ({ ready: 'GPU 挂载已就绪', pending: 'GPU 挂载准备中', failed: 'GPU 挂载失败', 'not-configured': space.provider === 'idc' ? '等待管理员登记' : 'GPU 挂载待配置' }[space.mountStatus] || '状态待确认')
+const statusLabel = (space) => ({ ready: 'GPU 挂载已就绪', pending: 'GPU 挂载准备中', failed: 'GPU 挂载失败', 'not-configured': 'GPU 挂载待配置' }[space.mountStatus] || '状态待确认')
 const statusType = (status) => ({ ready: 'success', pending: 'warning', failed: 'danger', 'not-configured': 'info' }[status] || 'info')
 const storageStatusLabel = (status) => ({ ready: '个人空间已就绪', 'not-configured': '个人空间待配置' }[status] || '状态待确认')
 const storageStatusType = (status) => ({ ready: 'success', 'not-configured': 'warning' }[status] || 'info')

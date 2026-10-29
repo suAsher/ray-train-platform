@@ -20,7 +20,7 @@ func TestAssistantStatusObservesPlainPodWithoutRayService(t *testing.T) {
 	pod.Name = "assistant-canary"
 	pod.ResourceVersion = ""
 	pod.UID = "plain-pod"
-	pod.Labels["raytrain.wellspiking.ai/assistant-role"] = "inference"
+	pod.Labels["raytrain.io/assistant-role"] = "inference"
 	if _, err := k.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}

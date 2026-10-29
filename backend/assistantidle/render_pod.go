@@ -34,7 +34,7 @@ func RenderPod(cfg RenderConfig) (*unstructured.Unstructured, error) {
 	}
 	labels := map[string]string{
 		"app.kubernetes.io/name": cfg.Name, "app.kubernetes.io/part-of": "raytrain-assistant-idle", componentLabel: componentValue, instanceLabel: cfg.InstanceID,
-		queueNameLabel: cfg.QueueName, workloadPriorityClassLabel: cfg.WorkloadPriorityClassName, "kueue.x-k8s.io/managed": "true", "raytrain.wellspiking.ai/assistant-role": "inference",
+		queueNameLabel: cfg.QueueName, workloadPriorityClassLabel: cfg.WorkloadPriorityClassName, "kueue.x-k8s.io/managed": "true", "raytrain.io/assistant-role": "inference",
 	}
 	spec := podSpec(cfg, true)
 	spec["restartPolicy"] = "Never"

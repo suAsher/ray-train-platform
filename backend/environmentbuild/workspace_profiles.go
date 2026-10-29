@@ -2,6 +2,7 @@ package environmentbuild
 
 import (
 	"ray-train-platform-backend/domain"
+	"ray-train-platform-backend/registryauth"
 	"strings"
 )
 
@@ -16,7 +17,9 @@ type WorkspaceProfile struct {
 
 func pinnedProfileImage(image string) bool {
 	parts := strings.Split(image, "@")
-	return len(parts) == 2 && compatibleWorkspaceSourcePattern.MatchString(image) && strings.HasPrefix(image, RegistryHost+"/") && digestPattern.MatchString(parts[1])
+	host, path, ok := strings.Cut(image, "/")
+	_, err := registryauth.NormalizeHost(host)
+	return ok && path != "" && host != "" && err == nil && len(parts) == 2 && compatibleWorkspaceSourcePattern.MatchString(image) && digestPattern.MatchString(parts[1])
 }
 
 // NormalizeWorkspaceProfiles keeps one immutable pairing per workspace digest.

@@ -23,13 +23,11 @@ var (
 )
 
 type Config struct {
-	PersonalStorage                          PersonalStorageConfig
 	AssistantControllerCAFile                string
 	AssistantIdleNamespace                   string
 	AssistantIdleDemandAuthKey               string
 	Assistant                                AssistantConfig
 	EnvironmentBuild                         EnvironmentBuildConfig
-	StorageSync                              StorageSyncConfig
 	Telemetry                                TelemetryConfig
 	SPKRayjobMinimumVersion                  string
 	AppEnv                                   string
@@ -40,6 +38,7 @@ type Config struct {
 	OIDCAudience                             string
 	OIDCGroupPrefix                          string
 	OIDCRequired                             bool
+	WebOIDCEnabled                           bool
 	OAuth2ProxyAuthEnabled                   bool
 	OAuth2ProxyAutoProvisionEnabled          bool
 	OAuth2ProxyDefaultTenant                 string
@@ -60,15 +59,6 @@ type Config struct {
 	DataSpacesFSXAttributes                  string
 	DataSpacesMountCapacity                  string
 	DataSpacesPublicRoot                     string
-	IDCDataSpacesEnabled                     bool
-	IDCDataSpacesMountCapacity               string
-	IDCDataSpaceSources                      map[string]IDCDataSpaceSource
-	IDCSyncEnabled                           bool
-	IDCSyncImage                             string
-	IDCSyncBucket                            string
-	IDCSyncTosutilConfigSecret               string
-	IDCSyncServiceAccount                    string
-	IDCSyncWorkClaimName                     string
 	DatasetVersioningEnabled                 bool
 	RayDataStreamingEnabled                  bool
 	DatasetPublisherEnabled                  bool
@@ -144,10 +134,6 @@ type Config struct {
 	MLflowPublicOrigin                       string
 	MLflowDashboardSessionHours              int
 	KueueClusterQueue                        string
-	IDCStorageEnabled                        bool
-	IDCExistingClaim                         string
-	IDCStorageClass                          string
-	IDCMountPath                             string
 	RayVersion                               string
 	RayTrainManagedEnabled                   bool
 	RayTrainManagedTenants                   []string
@@ -173,15 +159,6 @@ type Config struct {
 	PersonalStorageMaxQuotaBytes             int64
 	MigrationsOnly                           bool
 	DemoMode                                 bool
-}
-
-// IDCDataSpaceSource is a deployment-owned NFS export. It is deliberately
-// configuration-only: callers can select a logical data space but cannot
-// submit an arbitrary NFS server or path through the API.
-type IDCDataSpaceSource struct {
-	Server       string   `json:"server"`
-	Path         string   `json:"path"`
-	MountOptions []string `json:"mountOptions"`
 }
 
 type DatasetPublisherToleration struct {
@@ -213,9 +190,6 @@ func Load() (Config, error) {
 		MLflowPublicOrigin:                strings.TrimSpace(os.Getenv("MLFLOW_PUBLIC_ORIGIN")),
 		MLflowDashboardSessionHours:       8,
 		KueueClusterQueue:                 envOr("KUEUE_CLUSTER_QUEUE", "cluster-gpu-queue"),
-		IDCExistingClaim:                  os.Getenv("IDC_EXISTING_CLAIM"),
-		IDCStorageClass:                   os.Getenv("IDC_STORAGE_CLASS"),
-		IDCMountPath:                      envOr("IDC_MOUNT_PATH", "/mnt/idc"),
 		LocalCacheStorageClass:            strings.TrimSpace(os.Getenv("LOCAL_CACHE_STORAGE_CLASS")),
 		LocalCacheStorageClassData1:       strings.TrimSpace(envOr("LOCAL_CACHE_STORAGE_CLASS_DATA1", os.Getenv("LOCAL_CACHE_STORAGE_CLASS"))),
 		LocalCacheStorageClassData2:       strings.TrimSpace(os.Getenv("LOCAL_CACHE_STORAGE_CLASS_DATA2")),
@@ -229,12 +203,6 @@ func Load() (Config, error) {
 		RayAPIDefaultImage:                strings.TrimSpace(os.Getenv("RAY_API_DEFAULT_IMAGE")),
 		DataSpacesMountCapacity:           strings.TrimSpace(os.Getenv("DATA_SPACES_MOUNT_CAPACITY")),
 		DataSpacesPublicRoot:              envOr("DATA_SPACES_PUBLIC_ROOT", domain.DefaultPublicDataRoot),
-		IDCDataSpacesMountCapacity:        strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_MOUNT_CAPACITY")),
-		IDCSyncImage:                      strings.TrimSpace(os.Getenv("IDC_SYNC_IMAGE")),
-		IDCSyncBucket:                     strings.TrimSpace(envOr("IDC_SYNC_BUCKET", os.Getenv("TOS_BUCKET"))),
-		IDCSyncTosutilConfigSecret:        strings.TrimSpace(os.Getenv("IDC_SYNC_TOSUTIL_CONFIG_SECRET")),
-		IDCSyncServiceAccount:             strings.TrimSpace(os.Getenv("IDC_SYNC_SERVICE_ACCOUNT")),
-		IDCSyncWorkClaimName:              strings.TrimSpace(os.Getenv("IDC_SYNC_WORK_CLAIM_NAME")),
 		DatasetInternalPrefix:             envOr("DATASET_INTERNAL_PREFIX", domain.DefaultDatasetInternalPrefix),
 		DatasetPublisherImage:             strings.TrimSpace(os.Getenv("DATASET_PUBLISHER_IMAGE")),
 		DatasetPublisherImagePullPolicy:   strings.TrimSpace(envOr("DATASET_PUBLISHER_IMAGE_PULL_POLICY", "IfNotPresent")),
@@ -299,6 +267,12 @@ func Load() (Config, error) {
 	}
 	if cfg.OIDCRequired, err = parseBool("OIDC_REQUIRED", cfg.AppEnv == "production"); err != nil {
 		return Config{}, err
+	}
+	if cfg.WebOIDCEnabled, err = parseBool("WEB_OIDC_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.WebOIDCEnabled && !cfg.OIDCRequired {
+		return Config{}, fmt.Errorf("WEB_OIDC_ENABLED requires OIDC_REQUIRED")
 	}
 	if cfg.OAuth2ProxyAuthEnabled, err = parseBool("OAUTH2_PROXY_AUTH_ENABLED", false); err != nil {
 		return Config{}, err
@@ -396,12 +370,6 @@ func Load() (Config, error) {
 	if cfg.TOSObjectSetQuotasEnabled, err = parseBool("TOS_OBJECT_SET_QUOTAS_ENABLED", false); err != nil {
 		return Config{}, err
 	}
-	if cfg.IDCDataSpacesEnabled, err = parseBool("IDC_DATA_SPACES_ENABLED", false); err != nil {
-		return Config{}, err
-	}
-	if cfg.IDCSyncEnabled, err = parseBool("IDC_SYNC_ENABLED", false); err != nil {
-		return Config{}, err
-	}
 	if cfg.DatasetVersioningEnabled, err = parseBool("DATASET_VERSIONING_ENABLED", false); err != nil {
 		return Config{}, err
 	}
@@ -456,11 +424,6 @@ func Load() (Config, error) {
 	if cfg.DatasetPublisherMaxPartitionAttempts, err = parseInt("DATASET_PUBLISHER_MAX_PARTITION_ATTEMPTS", 3); err != nil {
 		return Config{}, err
 	}
-	if raw := strings.TrimSpace(os.Getenv("IDC_DATA_SPACES_SOURCES_JSON")); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &cfg.IDCDataSpaceSources); err != nil {
-			return Config{}, fmt.Errorf("IDC_DATA_SPACES_SOURCES_JSON must be a JSON object of NFS sources: %w", err)
-		}
-	}
 	cfg.BootstrapAdminUsername = envOr("BOOTSTRAP_ADMIN_USERNAME", "admin")
 	cfg.SPKRayjobMinimumVersion = strings.TrimSpace(os.Getenv("SPK_RAYJOB_MINIMUM_VERSION"))
 	if cfg.SPKRayjobMinimumVersion != "" {
@@ -500,18 +463,12 @@ func Load() (Config, error) {
 	if cfg.PATMaxExpiryDays, err = parseInt("PAT_MAX_EXPIRY_DAYS", 365); err != nil {
 		return Config{}, err
 	}
-	if cfg.IDCStorageEnabled, err = parseBool("IDC_STORAGE_ENABLED", false); err != nil {
-		return Config{}, err
-	}
 	if cfg.DemoMode, err = parseBool("DEMO_MODE", false); err != nil {
 		return Config{}, err
 	}
 
 	if err := validateProduction(cfg); err != nil {
 		return Config{}, err
-	}
-	if cfg.IDCStorageEnabled && cfg.IDCExistingClaim == "" {
-		return Config{}, fmt.Errorf("IDC storage requires IDC_EXISTING_CLAIM; dynamic PVC provisioning is disabled in V1")
 	}
 	if err := validateLocalCacheConfig(cfg); err != nil {
 		return Config{}, err
@@ -526,9 +483,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := validateObjectSetQuotaConfig(cfg); err != nil {
-		return Config{}, err
-	}
-	if err := validateIDCDataSpaceConfig(cfg); err != nil {
 		return Config{}, err
 	}
 	if err := validatePATConfig(cfg); err != nil {
@@ -548,16 +502,7 @@ func Load() (Config, error) {
 	if err := validateDatasetPublisherConfig(cfg); err != nil {
 		return Config{}, err
 	}
-	if err := validateIDCSyncConfig(cfg); err != nil {
-		return Config{}, err
-	}
 	if cfg.EnvironmentBuild, err = loadEnvironmentBuildConfig(); err != nil {
-		return Config{}, err
-	}
-	if cfg.PersonalStorage, err = loadPersonalStorageConfig(); err != nil {
-		return Config{}, err
-	}
-	if cfg.StorageSync, err = loadStorageSyncConfig(); err != nil {
 		return Config{}, err
 	}
 	if cfg.Assistant, err = loadAssistantConfig(); err != nil {
@@ -573,30 +518,6 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("ASSISTANT_IDLE_DEMAND_AUTH_KEY must contain at least 32 bytes when set")
 	}
 	return cfg, nil
-}
-
-func validateIDCSyncConfig(cfg Config) error {
-	if !cfg.IDCSyncEnabled {
-		return nil
-	}
-	if !cfg.IDCDataSpacesEnabled {
-		return fmt.Errorf("IDC_SYNC_ENABLED requires IDC_DATA_SPACES_ENABLED")
-	}
-	for _, required := range []struct{ value, name string }{{cfg.IDCSyncImage, "IDC_SYNC_IMAGE"}, {cfg.IDCSyncBucket, "IDC_SYNC_BUCKET"}, {cfg.IDCSyncTosutilConfigSecret, "IDC_SYNC_TOSUTIL_CONFIG_SECRET"}, {cfg.IDCSyncServiceAccount, "IDC_SYNC_SERVICE_ACCOUNT"}, {cfg.IDCSyncWorkClaimName, "IDC_SYNC_WORK_CLAIM_NAME"}} {
-		if strings.TrimSpace(required.value) == "" {
-			return fmt.Errorf("%s is required when IDC_SYNC_ENABLED is true", required.name)
-		}
-	}
-	if !pinnedImagePattern.MatchString(cfg.IDCSyncImage) || !validDatasetPublisherBucket(cfg.IDCSyncBucket) || !isDNSSubdomain(cfg.IDCSyncTosutilConfigSecret) || !isDNSSubdomain(cfg.IDCSyncServiceAccount) || !isDNSSubdomain(cfg.IDCSyncWorkClaimName) {
-		return fmt.Errorf("IDC sync configuration is invalid")
-	}
-	if source, ok := cfg.IDCDataSpaceSources["original"]; !ok || strings.TrimSpace(source.Server) == "" || strings.TrimSpace(source.Path) == "" {
-		return fmt.Errorf("IDC_SYNC_ENABLED requires the configured original IDC source")
-	}
-	if cfg.DatasetPublisherEnabled && cfg.IDCSyncBucket != cfg.DatasetPublisherSourceBucket {
-		return fmt.Errorf("IDC_SYNC_BUCKET must match DATASET_PUBLISHER_SOURCE_BUCKET when dataset publication is enabled")
-	}
-	return nil
 }
 
 func validateDatasetPublisherConfig(cfg Config) error {
@@ -947,58 +868,6 @@ func validateObjectSetQuotaConfig(cfg Config) error {
 	return nil
 }
 
-func validateIDCDataSpaceConfig(cfg Config) error {
-	if !cfg.IDCDataSpacesEnabled {
-		return nil
-	}
-	if cfg.IDCStorageEnabled {
-		return fmt.Errorf("IDC_DATA_SPACES_ENABLED cannot be combined with deprecated IDC_STORAGE_ENABLED")
-	}
-	if strings.TrimSpace(cfg.IDCDataSpacesMountCapacity) == "" {
-		return fmt.Errorf("IDC_DATA_SPACES_MOUNT_CAPACITY is required when IDC_DATA_SPACES_ENABLED is true")
-	}
-	quantity, err := resource.ParseQuantity(cfg.IDCDataSpacesMountCapacity)
-	if err != nil || quantity.Sign() <= 0 {
-		return fmt.Errorf("IDC_DATA_SPACES_MOUNT_CAPACITY must be a positive Kubernetes storage quantity")
-	}
-	for _, name := range []string{"original", "wellspiking", "shared", "spk-hybrid", "spk-ssd"} {
-		source, ok := cfg.IDCDataSpaceSources[name]
-		if !ok {
-			return fmt.Errorf("IDC_DATA_SPACES_SOURCES_JSON requires %s", name)
-		}
-		if strings.TrimSpace(source.Server) == "" || strings.TrimSpace(source.Server) != source.Server || strings.ContainsAny(source.Server, " \t/\\@") {
-			return fmt.Errorf("IDC_DATA_SPACES_SOURCES_JSON.%s.server must be a bare hostname or IP address", name)
-		}
-		if !strings.HasPrefix(source.Path, "/") || source.Path == "/" || strings.TrimSpace(source.Path) != source.Path || path.Clean(source.Path) != source.Path {
-			return fmt.Errorf("IDC_DATA_SPACES_SOURCES_JSON.%s.path must be a clean non-root absolute export path", name)
-		}
-		if err := validateIDCMountOptions(source.MountOptions); err != nil {
-			return fmt.Errorf("IDC_DATA_SPACES_SOURCES_JSON.%s.mountOptions: %w", name, err)
-		}
-	}
-	return nil
-}
-
-func validateIDCMountOptions(options []string) error {
-	allowed := map[string]bool{
-		"ro": true, "hard": true, "noatime": true, "_netdev": true, "nofail": true,
-		"vers=3": true, "timeo=600": true, "retrans=2": true,
-		"rsize=1048576": true, "wsize=1048576": true,
-	}
-	seenRO := false
-	for _, raw := range options {
-		option := strings.TrimSpace(raw)
-		if option == "" || option != raw || !allowed[option] {
-			return fmt.Errorf("option %q is not in the read-only allowlist", raw)
-		}
-		seenRO = seenRO || option == "ro"
-	}
-	if len(options) > 0 && !seenRO {
-		return fmt.Errorf("must include ro")
-	}
-	return nil
-}
-
 func parseDataSpaceEndpoint(raw string) (string, error) {
 	value := strings.TrimSpace(raw)
 	value = strings.TrimPrefix(value, "https://")
@@ -1125,7 +994,12 @@ func validateProduction(cfg Config) error {
 		return nil
 	}
 	if !cfg.OIDCRequired && !cfg.OAuth2ProxyAuthEnabled {
-		return fmt.Errorf("OIDC_REQUIRED cannot be disabled in production")
+		if !cfg.LocalAuthEnabled || !cfg.PATEnabled {
+			return fmt.Errorf("production requires OIDC authentication or local authentication with PAT enabled")
+		}
+		if len([]byte(cfg.PATPepper)) < 32 {
+			return fmt.Errorf("PAT_PEPPER must contain at least 32 bytes for local authentication")
+		}
 	}
 	checks := []struct{ value, message string }{
 		{cfg.DatabaseURL, "DATABASE_URL is required in production"},

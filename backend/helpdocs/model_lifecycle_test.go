@@ -12,8 +12,8 @@ func TestModelLifecycleArticlesExposeUserWorkflowWithoutChangingSources(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sources) != 37 {
-		t.Fatalf("original sources got %d want 37", len(sources))
+	if len(sources) != 36 {
+		t.Fatalf("original sources got %d want 36", len(sources))
 	}
 	articles := helpArticleTestByID(ProjectHelpArticles(withPlatformSeedActor(sources)))
 	for _, id := range []string{modelRegistrationArticleID, modelMaintenanceArticleID} {

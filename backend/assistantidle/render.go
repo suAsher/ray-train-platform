@@ -20,7 +20,7 @@ const (
 	queueNameLabel              = "kueue.x-k8s.io/queue-name"
 	workloadPriorityClassLabel  = "kueue.x-k8s.io/priority-class"
 	workerGroupName             = "gpu-worker"
-	dedicatedTenantKey          = "platform.wellspiking.ai/dedicated-tenant"
+	dedicatedTenantKey          = "raytrain.io/dedicated-tenant"
 	defaultGPUDeviceTaintKey    = "nvidia.com/gpu"
 	rayObjectManagerPort        = "8076"
 	rayNodeManagerPort          = "8077"
@@ -421,7 +421,7 @@ func podLabels(base map[string]string, role string) map[string]string {
 	for key, value := range base {
 		labels[key] = value
 	}
-	labels["raytrain.wellspiking.ai/assistant-role"] = role
+	labels["raytrain.io/assistant-role"] = role
 	return labels
 }
 

@@ -91,7 +91,7 @@ func TestAssistantIdleInferenceServiceRoutesOnlyTLSInferencePort(t *testing.T) {
 	for key, want := range map[string]string{
 		"app.kubernetes.io/instance":             "PLACEHOLDER_INSTANCE_ID",
 		"app.kubernetes.io/component":            "assistant-idle",
-		"raytrain.wellspiking.ai/assistant-role": "inference",
+		"raytrain.io/assistant-role": "inference",
 	} {
 		if service.Spec.Selector[key] != want {
 			t.Fatalf("inference service selector[%s]=%q, want %q in %#v", key, service.Spec.Selector[key], want, service.Spec.Selector)

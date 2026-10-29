@@ -547,3 +547,12 @@ test('JobDetail equivalent command omits cache flags for off and legacy jobs', (
     /--cache-(?:mode|size)/,
   )
 })
+
+test('portable PVC selections use authorized asset IDs without logical data spaces', () => {
+  const form = { ...baseForm(), input: {}, checkpoint: {}, output: {}, datasetStorage: { assetId: 'dataset-a' }, outputStorage: { assetId: 'results-a' } }
+  const spec = buildJobSpec(form)
+  assert.deepEqual(spec.datasetStorage, { assetId: 'dataset-a' })
+  assert.deepEqual(spec.outputStorage, { assetId: 'results-a' })
+  assert.deepEqual(spec.input, {})
+  assert.throws(() => buildJobSpec({ ...form, datasetStorage: { assetId: 'dataset-a', relativePath: '../private' } }), /路径不合法/)
+})

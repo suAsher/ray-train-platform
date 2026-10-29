@@ -5,7 +5,7 @@
         <h4 class="text-sm font-bold text-white">数据集与存储资源</h4>
         <p class="mt-1 text-xs leading-5 text-slate-400">
           把管理员已创建的 PVC 登记为用户可选的数据来源。用户在「新建训练任务 → 训练输入」中按名称选择，
-          看不到也不需要知道 PVC 名或 TOS 前缀。
+          看不到也不需要知道 PVC 名。
         </p>
       </div>
       <el-button size="small" icon="Plus" @click="dialogVisible = true">登记存储资源</el-button>
@@ -43,7 +43,7 @@
     <el-dialog v-model="dialogVisible" title="登记存储资源" width="min(520px, 94vw)">
       <el-alert type="info" :closable="false" show-icon class="mb-4">
         <template #title>PVC 必须已经存在于租户 namespace 中</template>
-        平台不会替你创建 PVC，也不会从用户输入推导 TOS 路径。请先由运维创建好静态 PV/PVC，再在这里登记。
+        平台不会替你创建 PVC，用户仅选择管理员已授权的资产。请先由运维创建好PV/PVC，再在这里登记。
       </el-alert>
       <el-form label-position="top" @submit.prevent>
         <el-form-item label="显示名称">
@@ -65,7 +65,7 @@
         </el-form-item>
         <div class="flex flex-wrap gap-6">
           <el-checkbox v-model="form.readOnly">只读挂载</el-checkbox>
-          <el-checkbox v-model="form.browseEnabled">允许在页面浏览目录</el-checkbox>
+          <span class="text-xs text-slate-400">PVC 通过容器访问，不提供网页目录浏览</span>
           <el-checkbox v-model="form.shared" :disabled="!isSuperAdmin">全平台共享</el-checkbox>
         </div>
         <p class="mt-2 text-[11px] leading-5 text-slate-500">
@@ -91,7 +91,7 @@ defineProps({ isSuperAdmin: { type: Boolean, default: false } })
 const assets = ref([])
 const dialogVisible = ref(false)
 const saving = ref(false)
-const form = ref({ name: '', description: '', kind: 'dataset', claimName: '', readOnly: true, browseEnabled: true, shared: false })
+const form = ref({ name: '', description: '', kind: 'dataset', claimName: '', readOnly: true, browseEnabled: false, shared: false })
 
 const kindLabel = (kind) => ({ dataset: '训练输入', checkpoint: 'Checkpoint', output: '训练产物' }[kind] || kind)
 const kindTag = (kind) => ({ dataset: 'primary', checkpoint: 'warning', output: 'success' }[kind] || 'info')
@@ -121,10 +121,10 @@ const submit = async () => {
   }
   saving.value = true
   try {
-    await createStorageAsset({ ...form.value, provider: 'tos' })
+    await createStorageAsset({ ...form.value, provider: 'pvc' })
     ElMessage.success(`已登记「${form.value.name}」，用户现在可以在训练输入中选择它`)
     dialogVisible.value = false
-    form.value = { name: '', description: '', kind: 'dataset', claimName: '', readOnly: true, browseEnabled: true, shared: false }
+    form.value = { name: '', description: '', kind: 'dataset', claimName: '', readOnly: true, browseEnabled: false, shared: false }
     await load()
   } catch (error) {
     ElMessage.error(error.message || '登记存储资源失败')

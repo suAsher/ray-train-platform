@@ -2,39 +2,8 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: ray-train-frontend
-  namespace: {{ .Values.namespace }}
-  labels:
-    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
-    app.kubernetes.io/component: portal
-spec:
-  podSelector:
-    matchLabels:
-      app: ray-train-frontend
-  policyTypes: ["Ingress", "Egress"]
-  ingress:
-    - {}
-  egress:
-    - to:
-        - podSelector:
-            matchLabels:
-              app: ray-train-backend
-      ports:
-        - protocol: TCP
-          port: 8080
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
   name: ray-train-backend
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: api
@@ -44,13 +13,6 @@ spec:
       app: ray-train-backend
   policyTypes: ["Ingress", "Egress"]
   ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app: ray-train-frontend
-      ports:
-        - protocol: TCP
-          port: 8080
     - ports:
         - protocol: TCP
           port: 8080

@@ -15,7 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-const dedicatedTenantTaintKey = "platform.wellspiking.ai/dedicated-tenant"
+const dedicatedTenantTaintKey = "raytrain.io/dedicated-tenant"
 
 // Dedicated tolerations come only from this Node; never tolerate unrelated
 // taints or broaden the scope to Exists or a different effect.

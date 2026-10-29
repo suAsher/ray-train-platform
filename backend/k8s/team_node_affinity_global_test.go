@@ -17,7 +17,7 @@ import (
 )
 
 func compactPlacementNode(name string) *corev1.Node {
-	return trainingNode(name, map[string]string{"accelerator": "nvidia-rtx-4090", "kubernetes.io/hostname": name, "platform.wellspiking.ai/cache-ready": "true"}, "8", "64", "512Gi")
+	return trainingNode(name, map[string]string{"accelerator": "nvidia-rtx-4090", "kubernetes.io/hostname": name, "raytrain.io/cache-ready": "true"}, "8", "64", "512Gi")
 }
 
 func TestPreferredTeamWorkerNodesCompactsGlobalBeforeTeam(t *testing.T) {

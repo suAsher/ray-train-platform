@@ -62,7 +62,7 @@ python -m pip check
 
 | 目标镜像仓库 | 使用的凭据 |
 | --- | --- |
-| harbor.wellspiking.ai | 个人资料中的 CLI Secret |
+| registry.example.com | 镜像仓库签发的访问凭据 |
 | harbor.qomolo.com | 账号密码 |
 
 这两种凭据都不是平台 PAT。不要把凭据写入源码、终端命令或截图；切换仓库后需要重新授权。
@@ -112,7 +112,7 @@ READY 表示镜像构建与拉取检查通过，不包含业务模型或 GPU 兼
 
 ~~~bash
 # 登录会交互提示输入平台 PAT；不要把令牌直接写进命令历史。
-spk-rayjob login --server https://raytrain.wellspiking.ai --token-stdin
+spk-rayjob login --server https://raytrain.example.com --token-stdin
 spk-rayjob images
 
 # 进入包含 train.py 的本地源码目录，复制保存版本的完整镜像地址（含所选仓库和摘要）。

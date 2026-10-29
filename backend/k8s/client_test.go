@@ -78,33 +78,6 @@ func TestEnsureDataMountResourcesRefusesLegacyFUSEPermissions(t *testing.T) {
 	}
 }
 
-func TestEnsureIDCDataMountResourcesIsIdempotentAndDoesNotAdoptOtherNFSExport(t *testing.T) {
-	binding, err := domain.NewIDCDataMountBinding("idc-original-a", "tenant-a", domain.DataSpaceIDCOriginal, "idc-original-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := NewClientFromInterfaces(nil, k8sfake.NewSimpleClientset())
-	source := IDCDataMountSource{Server: "192.0.2.20", Path: "/exports/original"}
-	ready, err := client.EnsureIDCDataMountResources(context.Background(), binding, "tenant-tenant-a", "1Pi", source)
-	if err != nil || ready {
-		t.Fatalf("new IDC PVC should be pending: ready=%t err=%v", ready, err)
-	}
-	pvc, err := client.kubernetes.CoreV1().PersistentVolumeClaims("tenant-tenant-a").Get(context.Background(), binding.ClaimName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get IDC PVC: %v", err)
-	}
-	pvc.Status.Phase = corev1.ClaimBound
-	if _, err := client.kubernetes.CoreV1().PersistentVolumeClaims("tenant-tenant-a").UpdateStatus(context.Background(), pvc, metav1.UpdateOptions{}); err != nil {
-		t.Fatalf("mark IDC PVC bound: %v", err)
-	}
-	ready, err = client.EnsureIDCDataMountResources(context.Background(), binding, "tenant-tenant-a", "1Pi", source)
-	if err != nil || !ready {
-		t.Fatalf("bound IDC PVC should become ready: ready=%t err=%v", ready, err)
-	}
-	if _, err := client.EnsureIDCDataMountResources(context.Background(), binding, "tenant-tenant-a", "1Pi", IDCDataMountSource{Server: "192.0.2.20", Path: "/exports/other"}); err == nil {
-		t.Fatal("IDC mount controller adopted a differently configured NFS export")
-	}
-}
 
 func TestEnsureRayJobIsIdempotent(t *testing.T) {
 	client := &Client{dynamic: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())}

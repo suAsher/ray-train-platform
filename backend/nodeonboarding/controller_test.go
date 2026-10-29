@@ -25,7 +25,7 @@ func makeHex() []byte {
 	return b
 }
 func eligibleNode() *corev1.Node {
-	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "gpu-1", UID: types.UID("node-uid"), Labels: map[string]string{"accelerator": "nvidia-rtx-4090", "platform.wellspiking.ai/gpu-pool": "production", "kubernetes.io/hostname": "gpu-1"}}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}, Allocatable: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("8")}}}
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "gpu-1", UID: types.UID("node-uid"), Labels: map[string]string{"accelerator": "nvidia-rtx-4090", "raytrain.io/gpu-pool": "production", "kubernetes.io/hostname": "gpu-1"}}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}, Allocatable: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("8")}}}
 }
 func testController(t *testing.T) (*Controller, *fake.Clientset) {
 	t.Helper()

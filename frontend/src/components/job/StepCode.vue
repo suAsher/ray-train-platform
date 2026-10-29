@@ -40,7 +40,7 @@
       <div v-if="form.codeSourceType === 'git'" class="space-y-4">
         <div>
           <label class="field-label">Git 仓库地址</label>
-          <el-input v-model="form.gitURL" placeholder="https://gitlab.qomolo.com/dl/bevfusion.git" @input="clearResolved" />
+          <el-input v-model="form.gitURL" placeholder="https://github.com/your-team/training.git" @input="clearResolved" />
         </div>
         <div>
           <label class="field-label">分支、标签或 Commit</label>

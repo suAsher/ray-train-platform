@@ -95,38 +95,6 @@ func TestResolveWorkspaceDataMountPlanUsesConfiguredTemporaryPublicSubPath(t *te
 	}
 }
 
-func TestLaunchWorkspaceWaitsForIDCDataSpaceToBindBeforeCreatingCluster(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	workspaces := &fakeWorkspaceStore{getErr: context.Canceled}
-	core := k8sfake.NewSimpleClientset()
-	dynamic := fake.NewSimpleDynamicClient(runtime.NewScheme())
-	handler := NewHandler(&fakeJobRepository{}, Options{
-		Workspaces: workspaces, Kubernetes: k8s.NewClientFromInterfaces(dynamic, core), RayVersion: "2.35.0",
-		WorkspaceImage: "registry.example/workspace@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		DataSpaces:     &fakeDataSpaceStore{}, IDCDataSpacesEnabled: true, IDCDataSpacesMountCapacity: "1Pi",
-		IDCDataSpaceSources: map[domain.DataSpaceID]k8s.IDCDataMountSource{
-			domain.DataSpaceIDCOriginal:    {Server: "192.0.2.10", Path: "/exports/original"},
-			domain.DataSpaceIDCWellspiking: {Server: "192.0.2.11", Path: "/exports/wellspiking"},
-			domain.DataSpaceIDCShared:      {Server: "storage.example.internal", Path: "/exports/shared"},
-		},
-	})
-	router := gin.New()
-	router.Use(func(c *gin.Context) {
-		c.Set("ray-platform-principal", auth.Principal{Subject: "subject-1", TenantID: "team-a", Roles: []string{"Engineer"}, AuthType: auth.AuthTypeOIDC})
-		c.Next()
-	})
-	handler.RegisterWorkspaceRoutes(router.Group("/api/v1"))
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/dev-workspaces", strings.NewReader(`{}`))
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, request)
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "DATA_SPACE_MOUNT_NOT_READY") {
-		t.Fatalf("expected workspace to wait for pending IDC data, status=%d body=%s", response.Code, response.Body.String())
-	}
-	if _, err := core.CoreV1().PersistentVolumeClaims("tenant-team-a").Get(context.Background(), "idc-original-"+dataMountTenantKey("team-a"), metav1.GetOptions{}); err != nil {
-		t.Fatalf("IDC data adapter was not initialized before workspace launch: %v", err)
-	}
-}
 
 func TestLaunchWorkspaceReportsGPUQuotaExceeded(t *testing.T) {
 	gin.SetMode(gin.TestMode)

@@ -97,7 +97,7 @@ func TestEnvironmentProfileFullLifecyclePostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	image := func(name, digest string) string {
-		return "harbor.wellspiking.ai/public/" + name + "@sha256:" + strings.Repeat(digest, 64)
+		return "registry.example.com/public/" + name + "@sha256:" + strings.Repeat(digest, 64)
 	}
 	profile := eb.WorkspaceProfile{WorkspaceImage: image("cu126-debug", "5"), BaseImage: image("cu126-base", "6"), PrepareImage: image("cu126-prepare", "7"), Environment: domain.ImageEnvironment{Python: "3.10", CUDA: "12.6", PyTorch: "2.6.0+cu126"}}
 	runner := &environmentProfileRunnerFake{environmentRunnerFake: &environmentRunnerFake{}, image: profile.WorkspaceImage}

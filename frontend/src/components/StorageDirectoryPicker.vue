@@ -108,7 +108,7 @@ const selectedAsset = computed(() => assets.value.find((asset) => asset.id === s
 const breadcrumbs = computed(() => selectedPath.value ? selectedPath.value.split('/') : [])
 const canBrowse = computed(() => !props.output && selectedAsset.value?.provider === 'tos' && selectedAsset.value?.browseEnabled)
 
-const providerLabel = (provider) => provider === 'idc' ? 'IDC 只读存储' : 'TOS 对象存储'
+const providerLabel = (provider) => provider === 'pvc' ? 'Kubernetes PVC' : 'TOS 对象存储'
 
 const loadAssets = async () => {
   loadingAssets.value = true

@@ -43,7 +43,7 @@ func TestEnvironmentBuildAPIRejectsMachineCredentialsAndMalformedSecrets(t *test
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry := &environmentAPIRegistry{}
-			service, err := eb.NewService(&environmentAPIStore{}, &environmentAPIRunner{}, registry, &environmentAPIVault{}, eb.Config{Enabled: true, BaseImage: "example.com/base@sha256:" + strings.Repeat("1", 64), WorkspaceImage: "example.com/debug@sha256:" + strings.Repeat("2", 64), EncryptionKey: []byte(strings.Repeat("k", 32)), AuthorizationTTL: time.Hour})
+			service, err := eb.NewService(&environmentAPIStore{}, &environmentAPIRunner{}, registry, &environmentAPIVault{}, eb.Config{Enabled: true, BaseImage: "registry.example.com/base@sha256:" + strings.Repeat("1", 64), WorkspaceImage: "registry.example.com/debug@sha256:" + strings.Repeat("2", 64), EncryptionKey: []byte(strings.Repeat("k", 32)), AuthorizationTTL: time.Hour})
 			if err != nil {
 				t.Fatal(err)
 			}

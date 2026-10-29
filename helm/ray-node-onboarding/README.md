@@ -60,9 +60,9 @@ sets `Never`. This keeps Kubernetes' Priority admission defaults consistent and
 prevents the checks from preempting training. They use the default scheduler and cluster
 DNS, without custom DNS or host aliases.
 
-For a node reserved by the `platform.wellspiking.ai/dedicated-tenant=<tenant>:NoSchedule`
+For a node reserved by the `raytrain.io/dedicated-tenant=<tenant>:NoSchedule`
 taint, configure `dedicatedNodeTenants` with its exact Node name and tenant, for
-example `{"172.28.3.32": "algorithm"}`. The controller copies only the target
+example `{"gpu-node-reserved": "algorithm"}`. The controller copies only the target
 Node's actual dedicated `NoSchedule` taint into one `Equal` toleration. Preparation
 keeps its exact `nodeName` and does not need a toleration. The scheduled smoke Pod
 remains constrained to that same Node; it never tolerates unrelated taints,

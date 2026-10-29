@@ -156,7 +156,7 @@ func TestAssembleSelectsAMD64UsesOnlyPullAuthAndNeverExecutesLayer(t *testing.T)
 		}
 		if !strings.HasPrefix(request.Header.Get("Authorization"), "Bearer ") {
 			response := reply(401, "")
-			response.Header.Set("WWW-Authenticate", `Bearer realm="https://harbor.wellspiking.ai/service/token",service="harbor-registry"`)
+			response.Header.Set("WWW-Authenticate", `Bearer realm="https://registry.example.com/service/token",service="harbor-registry"`)
 			response.Request = request
 			return response, nil
 		}

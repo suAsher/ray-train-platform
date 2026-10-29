@@ -53,7 +53,7 @@ const quickstartPublicGuide = `### 从哪里开始
 | 查看物理 GPU 容量、使用率与历史曲线 | GPU 资源池（所有已登录成员可见） |
 | 创建 PAT、管理 Git 凭据 | 账户与安全 |
 
-任务列表默认显示当前团队，可切换“我提交的”。普通成员可以查看同团队其他成员的任务状态、日志、指标和关联 Run；不会看到其他团队的训练任务。取消任务、Worker 连接、续训及功能仓同步仍按各操作的所有者或管理员权限处理。GPU 资源池是独立的只读菜单，物理空闲卡不等于当前团队可申请配额。
+任务列表默认显示当前团队，可切换“我提交的”。普通成员可以查看同团队其他成员的任务状态、日志、指标和关联 Run；不会看到其他团队的训练任务。取消任务、Worker 连接、续训仍按各操作的所有者或管理员权限处理。GPU 资源池是独立的只读菜单，物理空闲卡不等于当前团队可申请配额。
 
 #### 页面助手怎么用？
 
@@ -80,21 +80,21 @@ const quickstartPublicGuide = `### 从哪里开始
 
 ### 安装 CLI
 
-网页入口 spiking.wellspiking.ai（开发环境 spiking-dev.wellspiking.ai）使用 Portal 统一认证。CLI 下载、PAT 登录和升级统一连接 https://raytrain.wellspiking.ai；不要使用网页域名，也不要给 server 追加 /raytrain 或 /api/v1。
+网页与 CLI 使用同一个平台地址。本文 https://raytrain.example.com 是占位示例，替换为实际部署地址，不要给 server 追加 /raytrain 或 /api/v1。本地账号可直接登录；OIDC 仅在管理员配置后可用。CLI 下载服务需另外启用，未启用时从本仓库构建 CLI。
 
 --help 来自本机正在执行的 CLI，不随登录 server 改变。网页更新不会升级本机程序；帮助或命令不一致时，先核对实际执行路径与版本。完整升级和排查步骤见[CLI 如何安装、登录和升级？](#cli-onboarding-v2)。
 
 Linux x86_64：
 
-` + "```bash\n(\n  set -eu\n  spk_tmp=$(mktemp -d)\n  trap 'rm -rf -- \"$spk_tmp\"' EXIT\n  curl -fL 'https://raytrain.wellspiking.ai/downloads/spk-rayjob/spk-rayjob-linux-amd64' -o \"$spk_tmp/spk-rayjob\"\n  curl -fL 'https://raytrain.wellspiking.ai/downloads/spk-rayjob/SHA256SUMS' -o \"$spk_tmp/SHA256SUMS\"\n  spk_want=$(awk '$2 == \"spk-rayjob-linux-amd64\" || $2 == \"*spk-rayjob-linux-amd64\" { print $1 }' \"$spk_tmp/SHA256SUMS\")\n  spk_got=$(sha256sum \"$spk_tmp/spk-rayjob\" | awk '{print $1}')\n  [ \"$spk_want\" = \"$spk_got\" ] || { echo 'SHA256 不一致，停止安装' >&2; exit 1; }\n  mkdir -p \"$HOME/.local/bin\"\n  install -m 0755 \"$spk_tmp/spk-rayjob\" \"$HOME/.local/bin/spk-rayjob\"\n  \"$HOME/.local/bin/spk-rayjob\" version\n)\n```" + `
+` + "```bash\n(\n  set -eu\n  spk_tmp=$(mktemp -d)\n  trap 'rm -rf -- \"$spk_tmp\"' EXIT\n  curl -fL 'https://raytrain.example.com/downloads/spk-rayjob/spk-rayjob-linux-amd64' -o \"$spk_tmp/spk-rayjob\"\n  curl -fL 'https://raytrain.example.com/downloads/spk-rayjob/SHA256SUMS' -o \"$spk_tmp/SHA256SUMS\"\n  spk_want=$(awk '$2 == \"spk-rayjob-linux-amd64\" || $2 == \"*spk-rayjob-linux-amd64\" { print $1 }' \"$spk_tmp/SHA256SUMS\")\n  spk_got=$(sha256sum \"$spk_tmp/spk-rayjob\" | awk '{print $1}')\n  [ \"$spk_want\" = \"$spk_got\" ] || { echo 'SHA256 不一致，停止安装' >&2; exit 1; }\n  mkdir -p \"$HOME/.local/bin\"\n  install -m 0755 \"$spk_tmp/spk-rayjob\" \"$HOME/.local/bin/spk-rayjob\"\n  \"$HOME/.local/bin/spk-rayjob\" version\n)\n```" + `
 
 macOS Apple Silicon：
 
-` + "```bash\n(\n  set -eu\n  spk_tmp=$(mktemp -d)\n  trap 'rm -rf -- \"$spk_tmp\"' EXIT\n  curl -fL 'https://raytrain.wellspiking.ai/downloads/spk-rayjob/spk-rayjob-darwin-arm64' -o \"$spk_tmp/spk-rayjob\"\n  curl -fL 'https://raytrain.wellspiking.ai/downloads/spk-rayjob/SHA256SUMS' -o \"$spk_tmp/SHA256SUMS\"\n  spk_want=$(awk '$2 == \"spk-rayjob-darwin-arm64\" || $2 == \"*spk-rayjob-darwin-arm64\" { print $1 }' \"$spk_tmp/SHA256SUMS\")\n  spk_got=$(shasum -a 256 \"$spk_tmp/spk-rayjob\" | awk '{print $1}')\n  [ \"$spk_want\" = \"$spk_got\" ] || { echo 'SHA256 不一致，停止安装' >&2; exit 1; }\n  mkdir -p \"$HOME/.local/bin\"\n  install -m 0755 \"$spk_tmp/spk-rayjob\" \"$HOME/.local/bin/spk-rayjob\"\n  \"$HOME/.local/bin/spk-rayjob\" version\n)\n```" + `
+` + "```bash\n(\n  set -eu\n  spk_tmp=$(mktemp -d)\n  trap 'rm -rf -- \"$spk_tmp\"' EXIT\n  curl -fL 'https://raytrain.example.com/downloads/spk-rayjob/spk-rayjob-darwin-arm64' -o \"$spk_tmp/spk-rayjob\"\n  curl -fL 'https://raytrain.example.com/downloads/spk-rayjob/SHA256SUMS' -o \"$spk_tmp/SHA256SUMS\"\n  spk_want=$(awk '$2 == \"spk-rayjob-darwin-arm64\" || $2 == \"*spk-rayjob-darwin-arm64\" { print $1 }' \"$spk_tmp/SHA256SUMS\")\n  spk_got=$(shasum -a 256 \"$spk_tmp/spk-rayjob\" | awk '{print $1}')\n  [ \"$spk_want\" = \"$spk_got\" ] || { echo 'SHA256 不一致，停止安装' >&2; exit 1; }\n  mkdir -p \"$HOME/.local/bin\"\n  install -m 0755 \"$spk_tmp/spk-rayjob\" \"$HOME/.local/bin/spk-rayjob\"\n  \"$HOME/.local/bin/spk-rayjob\" version\n)\n```" + `
 
 Windows x64 PowerShell：
 
-` + "```powershell\n& {\n  $ErrorActionPreference = 'Stop'\n  $spkTemp = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())\n  New-Item -ItemType Directory -Path $spkTemp | Out-Null\n  try {\n    $spkFile = Join-Path $spkTemp 'spk-rayjob-windows-amd64.exe'\n    $spkSums = Join-Path $spkTemp 'SHA256SUMS'\n    Invoke-WebRequest -Uri 'https://raytrain.wellspiking.ai/downloads/spk-rayjob/spk-rayjob-windows-amd64.exe' -OutFile $spkFile\n    Invoke-WebRequest -Uri 'https://raytrain.wellspiking.ai/downloads/spk-rayjob/SHA256SUMS' -OutFile $spkSums\n    $spkExpected = ((Get-Content $spkSums | Where-Object { $_ -match 'spk-rayjob-windows-amd64\\.exe$' }) -split '\\s+')[0]\n    if ((Get-FileHash $spkFile -Algorithm SHA256).Hash.ToLower() -ne $spkExpected.ToLower()) { throw 'SHA256 不一致，停止安装' }\n    $spkBin = Join-Path $env:USERPROFILE '.spk-rayjob'\n    New-Item -ItemType Directory -Force $spkBin | Out-Null\n    Copy-Item $spkFile (Join-Path $spkBin 'spk-rayjob.exe') -Force\n    & (Join-Path $spkBin 'spk-rayjob.exe') version\n  } finally { Remove-Item -LiteralPath $spkTemp -Recurse -Force }\n}\n```" + `
+` + "```powershell\n& {\n  $ErrorActionPreference = 'Stop'\n  $spkTemp = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())\n  New-Item -ItemType Directory -Path $spkTemp | Out-Null\n  try {\n    $spkFile = Join-Path $spkTemp 'spk-rayjob-windows-amd64.exe'\n    $spkSums = Join-Path $spkTemp 'SHA256SUMS'\n    Invoke-WebRequest -Uri 'https://raytrain.example.com/downloads/spk-rayjob/spk-rayjob-windows-amd64.exe' -OutFile $spkFile\n    Invoke-WebRequest -Uri 'https://raytrain.example.com/downloads/spk-rayjob/SHA256SUMS' -OutFile $spkSums\n    $spkExpected = ((Get-Content $spkSums | Where-Object { $_ -match 'spk-rayjob-windows-amd64\\.exe$' }) -split '\\s+')[0]\n    if ((Get-FileHash $spkFile -Algorithm SHA256).Hash.ToLower() -ne $spkExpected.ToLower()) { throw 'SHA256 不一致，停止安装' }\n    $spkBin = Join-Path $env:USERPROFILE '.spk-rayjob'\n    New-Item -ItemType Directory -Force $spkBin | Out-Null\n    Copy-Item $spkFile (Join-Path $spkBin 'spk-rayjob.exe') -Force\n    & (Join-Path $spkBin 'spk-rayjob.exe') version\n  } finally { Remove-Item -LiteralPath $spkTemp -Recurse -Force }\n}\n```" + `
 
 ### 登录和检查
 
@@ -110,11 +110,11 @@ Windows 当前 PowerShell 会话：
 
 在「账户与安全」创建当前团队的个人 PAT。Linux / macOS：
 
-` + "```bash\nprintf '平台 PAT: '\nread -rs SPK_TOKEN\nprintf '\\n'\nprintf '%s\\n' \"$SPK_TOKEN\" | spk-rayjob login --server 'https://raytrain.wellspiking.ai' --token-stdin\nunset SPK_TOKEN\nspk-rayjob login-check\nspk-rayjob images\nspk-rayjob datasets\n```" + `
+` + "```bash\nprintf '平台 PAT: '\nread -rs SPK_TOKEN\nprintf '\\n'\nprintf '%s\\n' \"$SPK_TOKEN\" | spk-rayjob login --server 'https://raytrain.example.com' --token-stdin\nunset SPK_TOKEN\nspk-rayjob login-check\nspk-rayjob images\nspk-rayjob datasets\n```" + `
 
 Windows PowerShell：
 
-` + "```powershell\n& {\n  $spkSecret = Read-Host '平台 PAT' -AsSecureString\n  $spkPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($spkSecret)\n  try {\n    [Runtime.InteropServices.Marshal]::PtrToStringBSTR($spkPtr) | spk-rayjob login --server 'https://raytrain.wellspiking.ai' --token-stdin\n    if ($LASTEXITCODE -eq 0) { spk-rayjob login-check; spk-rayjob images; spk-rayjob datasets }\n  } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($spkPtr); $spkSecret.Dispose() }\n}\n```" + `
+` + "```powershell\n& {\n  $spkSecret = Read-Host '平台 PAT' -AsSecureString\n  $spkPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($spkSecret)\n  try {\n    [Runtime.InteropServices.Marshal]::PtrToStringBSTR($spkPtr) | spk-rayjob login --server 'https://raytrain.example.com' --token-stdin\n    if ($LASTEXITCODE -eq 0) { spk-rayjob login-check; spk-rayjob images; spk-rayjob datasets }\n  } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($spkPtr); $spkSecret.Dispose() }\n}\n```" + `
 
 ### 第一条任务
 
@@ -142,10 +142,10 @@ PAT 绑定当前有效团队和显式 scope。旧 token 不会自动获得新增
 
 | 目标 | 地址 |
 | --- | --- |
-| 平台 API | ` + "`https://raytrain.wellspiking.ai/api/v1`" + ` |
-| 原生 Ray Jobs | ` + "`https://raytrain.wellspiking.ai/ray/`" + ` |
-| 原生 MLflow Tracking URI | ` + "`https://raytrain.wellspiking.ai/api/v1/mlflow-native`" + ` |
-| MLflow 网页 | ` + "`https://raytrain.wellspiking.ai/mlflow/`" + ` |
+| 平台 API | ` + "`https://raytrain.example.com/api/v1`" + ` |
+| 原生 Ray Jobs | ` + "`https://raytrain.example.com/ray/`" + ` |
+| 原生 MLflow Tracking URI | ` + "`https://raytrain.example.com/api/v1/mlflow-native`" + ` |
+| MLflow 网页 | ` + "`https://raytrain.example.com/mlflow/`" + ` |
 
 ### ID 边界
 
@@ -168,7 +168,6 @@ const dataPublicGuide = `### 代码和镜像
 | 个人数据 | 按提交配置读取；输出写入训练结果 | 个人输入、结果、checkpoint |
 | 团队数据 | 只读 | 团队共享输入 |
 | 公共数据 | 只读 | 平台公共数据 |
-| IDC 数据 | 只读 | 已同步的外部数据源 |
 | 版本化数据集 | 只读，提交时固定版本 | 可复现实验 |
 
 大文件在「数据与存储」使用分片上传。遇到超时先读上传状态，复用 upload ID、幂等键和文件 hash 续传。
@@ -257,7 +256,7 @@ const mlflowPublicGuide = `### 页面和记录关系
 
 本地电脑、外部服务和独立 Notebook 接入共享 MLflow 时使用下面的原生入口。平台内训练已注入连接时不要覆盖它，接法见[如何向 MLflow 记录训练参数和指标？](#mlflow-framework-metrics)。在「实验中心 → MLflow API」可以查看当前原生能力、Tracking URI 和示例：
 
-` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'\nexport MLFLOW_TRACKING_TOKEN=\"$RAYTRAIN_PAT\"\n```" + `
+` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.example.com/api/v1/mlflow-native'\nexport MLFLOW_TRACKING_TOKEN=\"$RAYTRAIN_PAT\"\n```" + `
 
 个人 PAT 需要显式 ` + "`mlflow:full`" + `。原生 SDK 使用原生 Experiment ID / Run ID，可对共享实验、Run、Artifact 和 Registry 做读写修改删除。
 
@@ -306,7 +305,7 @@ const mlflowSeedPublicSection = `先区分平台训练任务和 MLflow Run。Job
 | 目的 | 去哪里 | 当前能做什么 |
 | --- | --- | --- |
 | 查看训练任务关联的指标 | 实验中心 → 训练记录；任务详情 | 查询当前所在团队的 RayTrain 任务、日志、指标和关联 Run |
-| 用程序读写共享实验 | 实验中心 → MLflow API | 使用 ` + "`https://raytrain.wellspiking.ai/api/v1/mlflow-native`" + ` 和 ` + "`mlflow==3.14.0`" + ` |
+| 用程序读写共享实验 | 实验中心 → MLflow API | 使用 ` + "`https://raytrain.example.com/api/v1/mlflow-native`" + ` 和 ` + "`mlflow==3.14.0`" + ` |
 | 浏览共享 MLflow 页面 | 打开 MLflow | 通过浏览器会话查看共享实验、Run、Artifact 和 Registry |
 | 下载训练权重和结果 | 任务详情 → 训练产物 | 取回写入 ` + "`PLATFORM_OUTPUT_PATH`" + ` 的文件 |
 
@@ -328,8 +327,8 @@ const mlflowNativeConnectionGuide = `该地址是外部程序访问共享 MLflow
 
 只有当前服务确认原生 MLflow 可用时才显示这一用途；看不到时先刷新并检查服务提示，不应改用训练 CLI 令牌。普通训练 PAT 不会自动获得 mlflow:full，集成令牌不能代替该个人 PAT；平台内训练继续使用已注入的连接，不需个人 PAT。
 
-- Python SDK 的 tracking_uri 只填 ` + "`https://raytrain.wellspiking.ai/api/v1/mlflow-native`" + `，可设置 MLFLOW_TRACKING_URI，或调用 ` + "`MlflowClient(tracking_uri=\"https://raytrain.wellspiking.ai/api/v1/mlflow-native\")`" + `。SDK 会自行拼接后续原生 API 路径，不把 /api/2.0/mlflow 加到 tracking_uri。
-- 直接用 HTTP 查询或记录实验时，在前缀后接 /api/2.0/mlflow/...，例如 ` + "`https://raytrain.wellspiking.ai/api/v1/mlflow-native/api/2.0/mlflow/runs/search`" + `。文件操作优先使用 SDK，避免把所有文件协议当作同一种 REST 路径。
+- Python SDK 的 tracking_uri 只填 ` + "`https://raytrain.example.com/api/v1/mlflow-native`" + `，可设置 MLFLOW_TRACKING_URI，或调用 ` + "`MlflowClient(tracking_uri=\"https://raytrain.example.com/api/v1/mlflow-native\")`" + `。SDK 会自行拼接后续原生 API 路径，不把 /api/2.0/mlflow 加到 tracking_uri。
+- 直接用 HTTP 查询或记录实验时，在前缀后接 /api/2.0/mlflow/...，例如 ` + "`https://raytrain.example.com/api/v1/mlflow-native/api/2.0/mlflow/runs/search`" + `。文件操作优先使用 SDK，避免把所有文件协议当作同一种 REST 路径。
 - 两种外部调用都需要有效个人 PAT，且显式包含 mlflow:full。SDK 从 MLFLOW_TRACKING_TOKEN 读取它；HTTP 用 Authorization: Bearer 请求头。由运行环境安全注入令牌，不写进源码、URL 或日志。
 
 平台内训练已注入 MLFLOW_TRACKING_URI 时，不要覆盖为这个外部 PAT 网关，也不需要把个人 PAT 填进训练脚本。沿用运行时和框架适配器的连接，见[如何向 MLflow 记录训练参数和指标？](#mlflow-framework-metrics)。`
@@ -340,7 +339,7 @@ const mlflowAPISeedPublicSection = `查询训练实验时，先列出自己能�
 
 ### Python：读取实验、Run、指标历史和文件
 
-` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'\nexport MLFLOW_TRACKING_TOKEN=\"$RAYTRAIN_PAT\"\n```" + `
+` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.example.com/api/v1/mlflow-native'\nexport MLFLOW_TRACKING_TOKEN=\"$RAYTRAIN_PAT\"\n```" + `
 
 ` + "```python\nfrom mlflow import MlflowClient\nfrom mlflow.entities import ViewType\n\nclient = MlflowClient()\nselected_experiment_id = None\nexperiment_token = None\nwhile True:\n    experiments = client.search_experiments(\n        max_results=100,\n        page_token=experiment_token,\n        view_type=ViewType.ACTIVE_ONLY,\n    )\n    for experiment in experiments:\n        print(experiment.experiment_id, experiment.name)\n        if experiment.name == 'REPLACE_EXPERIMENT_NAME':\n            selected_experiment_id = experiment.experiment_id\n    experiment_token = experiments.token\n    if not experiment_token:\n        break\n\n# 需要已删除实验时，把 view_type 改成 ViewType.ALL。\nif selected_experiment_id is None:\n    raise SystemExit('没有找到目标实验，请从上面输出选择已有 Experiment ID')\n\nrun_token = None\nwhile True:\n    runs = client.search_runs(\n        experiment_ids=[selected_experiment_id],\n        filter_string=\"attributes.status = 'FINISHED'\",\n        max_results=100,\n        page_token=run_token,\n    )\n    for run in runs:\n        print(run.info.run_id, run.info.status, run.data.params, run.data.metrics)\n        print(client.get_metric_history(run.info.run_id, 'validation/accuracy'))\n        print(client.list_artifacts(run.info.run_id, 'reports'))\n    run_token = runs.token\n    if not run_token:\n        break\n```" + `
 
@@ -348,7 +347,7 @@ const mlflowAPISeedPublicSection = `查询训练实验时，先列出自己能�
 
 ### HTTP：读取和分页
 
-` + "```bash\nexport MLFLOW_API='https://raytrain.wellspiking.ai/api/v1/mlflow-native/api/2.0/mlflow'\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"max_results\":100,\"view_type\":\"ACTIVE_ONLY\"}' \\\n  \"${MLFLOW_API}/experiments/search\"\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"experiment_ids\":[\"REPLACE_EXPERIMENT_ID_FROM_SEARCH\"],\"max_results\":100}' \\\n  \"${MLFLOW_API}/runs/search\"\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  \"${MLFLOW_API}/metrics/get-history?run_id=REPLACE_RUN_ID&metric_key=validation%2Faccuracy\"\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  \"${MLFLOW_API}/artifacts/list?run_id=REPLACE_RUN_ID&path=reports\"\n```" + `
+` + "```bash\nexport MLFLOW_API='https://raytrain.example.com/api/v1/mlflow-native/api/2.0/mlflow'\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"max_results\":100,\"view_type\":\"ACTIVE_ONLY\"}' \\\n  \"${MLFLOW_API}/experiments/search\"\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"experiment_ids\":[\"REPLACE_EXPERIMENT_ID_FROM_SEARCH\"],\"max_results\":100}' \\\n  \"${MLFLOW_API}/runs/search\"\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  \"${MLFLOW_API}/metrics/get-history?run_id=REPLACE_RUN_ID&metric_key=validation%2Faccuracy\"\n\ncurl -sS --fail-with-body \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  \"${MLFLOW_API}/artifacts/list?run_id=REPLACE_RUN_ID&path=reports\"\n```" + `
 
 search 响应里如果有 next_page_token 字段，把它原样放进下一次请求正文的 page_token。HTTP 错误按 MLflow 原生响应处理；401 先查 PAT 是否有效、过期或撤销；403 查 PAT 是否包含 mlflow:full；404 查 Experiment ID / Run ID；429 按 Retry-After 等待；502/503 或超时先读回确认结果再重试。不要把 PAT 写进 URL、日志或截图。`
 
@@ -358,7 +357,7 @@ const mlflowExternalSeedPublicSection = `外部训练脚本、评估脚本或 No
 
 ### Python：创建实验、写参数/指标/文件
 
-` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'\nexport MLFLOW_TRACKING_TOKEN=\"$RAYTRAIN_PAT\"\n```" + `
+` + "```bash\npip install 'mlflow==3.14.0'\nexport MLFLOW_TRACKING_URI='https://raytrain.example.com/api/v1/mlflow-native'\nexport MLFLOW_TRACKING_TOKEN=\"$RAYTRAIN_PAT\"\n```" + `
 
 ` + "```python\nimport tempfile\nimport uuid\nfrom pathlib import Path\nimport mlflow\nfrom mlflow import MlflowClient\n\nmlflow.set_experiment('program-demo-' + uuid.uuid4().hex)\nwith mlflow.start_run(run_name='first-connection') as run:\n    mlflow.log_param('code_version', 'your-git-commit')\n    mlflow.log_param('dataset_version', 'your-dataset-version')\n    for step, score in enumerate([0.82, 0.87, 0.91], start=1):\n        mlflow.log_metric('validation/accuracy', score, step=step)\n    with tempfile.TemporaryDirectory() as directory:\n        report = Path(directory) / 'report.txt'\n        report.write_text('connection test\\n', encoding='utf-8')\n        mlflow.log_artifact(str(report), artifact_path='reports')\n    run_id = run.info.run_id\n\nclient = MlflowClient()\nprint(client.get_run(run_id).data.metrics)\nprint(client.get_metric_history(run_id, 'validation/accuracy'))\nprint(client.list_artifacts(run_id, 'reports'))\n```" + `
 
@@ -368,7 +367,7 @@ const mlflowExternalSeedPublicSection = `外部训练脚本、评估脚本或 No
 
 ### HTTP：创建、写入和读回
 
-` + "```bash\nexport MLFLOW_API='https://raytrain.wellspiking.ai/api/v1/mlflow-native/api/2.0/mlflow'\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"name\":\"program-demo-http\"}' \\\n  \"${MLFLOW_API}/experiments/create\"\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"experiment_id\":\"REPLACE_EXPERIMENT_ID\",\"run_name\":\"first-http-run\"}' \\\n  \"${MLFLOW_API}/runs/create\"\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"run_id\":\"REPLACE_RUN_ID\",\"params\":[{\"key\":\"code_version\",\"value\":\"your-git-commit\"}],\"metrics\":[{\"key\":\"validation/accuracy\",\"value\":0.91,\"timestamp\":1789171200000,\"step\":1}],\"tags\":[{\"key\":\"source\",\"value\":\"program-demo\"}]}' \\\n  \"${MLFLOW_API}/runs/log-batch\"\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"run_id\":\"REPLACE_RUN_ID\",\"status\":\"FINISHED\"}' \\\n  \"${MLFLOW_API}/runs/update\"\n```" + `
+` + "```bash\nexport MLFLOW_API='https://raytrain.example.com/api/v1/mlflow-native/api/2.0/mlflow'\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"name\":\"program-demo-http\"}' \\\n  \"${MLFLOW_API}/experiments/create\"\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"experiment_id\":\"REPLACE_EXPERIMENT_ID\",\"run_name\":\"first-http-run\"}' \\\n  \"${MLFLOW_API}/runs/create\"\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"run_id\":\"REPLACE_RUN_ID\",\"params\":[{\"key\":\"code_version\",\"value\":\"your-git-commit\"}],\"metrics\":[{\"key\":\"validation/accuracy\",\"value\":0.91,\"timestamp\":1789171200000,\"step\":1}],\"tags\":[{\"key\":\"source\",\"value\":\"program-demo\"}]}' \\\n  \"${MLFLOW_API}/runs/log-batch\"\n\ncurl -sS --fail-with-body -X POST \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"run_id\":\"REPLACE_RUN_ID\",\"status\":\"FINISHED\"}' \\\n  \"${MLFLOW_API}/runs/update\"\n```" + `
 
 HTTP 适合服务端集成和批量写指标；文件上传建议使用 Python SDK 的 log_artifact，避免手写 artifact 存储路由。读取文件列表可用 artifacts/list，下载文件优先用 MlflowClient.download_artifacts。
 

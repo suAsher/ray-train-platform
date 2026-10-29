@@ -8,13 +8,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
 	"time"
 )
-
-const demandURL = "https://raytrain.wellspiking.ai/api/v1/internal/assistant-idle/training-demand"
 
 type DemandObserver interface {
 	Pending(context.Context) (bool, error)
@@ -28,6 +27,11 @@ type HTTPDemandObserver struct {
 }
 
 func NewHTTPDemandObserver(tokenFile, caFile string) (*HTTPDemandObserver, error) {
+	endpoint := strings.TrimSpace(os.Getenv("ASSISTANT_DEMAND_URL"))
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "/api/v1/internal/assistant-idle/training-demand" {
+		return nil, errors.New("ASSISTANT_DEMAND_URL must be the platform HTTPS training-demand endpoint")
+	}
 	tokenBytes, err := os.ReadFile(tokenFile)
 	if err != nil {
 		return nil, errors.New("assistant demand credential is unavailable")
@@ -54,7 +58,7 @@ func NewHTTPDemandObserver(tokenFile, caFile string) (*HTTPDemandObserver, error
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.TLSClientConfig = tlsConfig
-	return &HTTPDemandObserver{client: &http.Client{Transport: transport, Timeout: 1500 * time.Millisecond, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, token: token, url: demandURL, now: time.Now}, nil
+	return &HTTPDemandObserver{client: &http.Client{Transport: transport, Timeout: 1500 * time.Millisecond, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, token: token, url: endpoint, now: time.Now}, nil
 }
 
 func (d *HTTPDemandObserver) Pending(ctx context.Context) (bool, error) {

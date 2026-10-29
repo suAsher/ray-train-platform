@@ -200,7 +200,7 @@ func TestEnsureIDCPrivateKeySecretCreatesOwnerScopedNonRotatingKey(t *testing.T)
 	if secret.Type != corev1.SecretTypeOpaque || string(secret.Data["id_ed25519"]) != "private-key-material" {
 		t.Fatalf("unexpected IDC private-key Secret: %#v", secret)
 	}
-	if secret.Labels["app.kubernetes.io/managed-by"] != "ray-train-platform" || secret.Labels["platform.wellspiking.ai/idc-sftp-key"] != "true" {
+	if secret.Labels["app.kubernetes.io/managed-by"] != "ray-train-platform" || secret.Labels["raytrain.io/idc-sftp-key"] != "true" {
 		t.Fatalf("IDC private-key Secret lacks ownership labels: %#v", secret.Labels)
 	}
 	if err := client.EnsureIDCPrivateKeySecret(context.Background(), namespace, name, []byte("replacement-key")); err != nil {

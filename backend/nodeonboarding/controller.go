@@ -16,10 +16,10 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-const EligibilitySelector = "accelerator=nvidia-rtx-4090,platform.wellspiking.ai/gpu-pool=production"
-const StateAnnotation = "platform.wellspiking.ai/onboarding-state"
-const ReasonAnnotation = "platform.wellspiking.ai/onboarding-reason"
-const ownerLabel = "platform.wellspiking.ai/onboarding-node-uid"
+const EligibilitySelector = "accelerator=nvidia-rtx-4090,raytrain.io/gpu-pool=production"
+const StateAnnotation = "raytrain.io/onboarding-state"
+const ReasonAnnotation = "raytrain.io/onboarding-reason"
+const ownerLabel = "raytrain.io/onboarding-node-uid"
 
 type Config struct {
 	Namespace, ConfigNamespace, ProbeServiceAccount string
@@ -93,7 +93,7 @@ func NewController(client kubernetes.Interface, config Config) (*Controller, err
 }
 
 func eligible(node *corev1.Node) bool {
-	if node.Labels["accelerator"] != "nvidia-rtx-4090" || node.Labels["platform.wellspiking.ai/gpu-pool"] != "production" || node.Labels["type"] == "virtual-kubelet" || node.Labels["virtual-kubelet.io/provider"] != "" {
+	if node.Labels["accelerator"] != "nvidia-rtx-4090" || node.Labels["raytrain.io/gpu-pool"] != "production" || node.Labels["type"] == "virtual-kubelet" || node.Labels["virtual-kubelet.io/provider"] != "" {
 		return false
 	}
 	gpu := node.Status.Allocatable[corev1.ResourceName("nvidia.com/gpu")]

@@ -112,7 +112,7 @@ func TestNodeOnboardingChartEnabledBoundaries(t *testing.T) {
 		"kind: Deployment", "replicas: 1", "type: Recreate", "serviceAccountName: node-onboarding", "runAsNonRoot: true", "readOnlyRootFilesystem: true", "allowPrivilegeEscalation: false", "drop: [\"ALL\"]",
 		"--data1-config-map=ray-cache-local-data1-runtime", "--data2-config-map=ray-cache-local-data2-runtime", "--probe-service-account=node-onboarding-probe", "--leader-election-lease=node-onboarding",
 		"kind: ValidatingAdmissionPolicy", "kind: ValidatingAdmissionPolicyBinding", "failurePolicy: Fail", "validationActions: [Deny]", "request.userInfo.username == 'system:serviceaccount:ray-cache-local:node-onboarding'",
-		"object.spec == oldObject.spec", "object.metadata.finalizers", "object.metadata.ownerReferences", "platform.wellspiking.ai/cache-ready", "platform.wellspiking.ai/onboarding-node-uid", "config.json",
+		"object.spec == oldObject.spec", "object.metadata.finalizers", "object.metadata.ownerReferences", "raytrain.io/cache-ready", "raytrain.io/onboarding-node-uid", "config.json",
 		"/proc/1/mountinfo", "Directory", "readOnly", "/app/node-onboarding", "prepare", "shares.json", "object.spec.automountServiceAccountToken == false",
 	} {
 		if !strings.Contains(got, required) {

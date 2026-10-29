@@ -64,7 +64,7 @@ func seedProject(t *testing.T, contents string) string {
 func TestSubmitWithNoFlagsUsesTheCommittedProjectDefaults(t *testing.T) {
 	root := seedProject(t, `name: bevfusion-lidar
 image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
-entrypoint: python tools/westwell_train.py configs/lidar.yaml --launcher pytorch
+entrypoint: python tools/train.py configs/lidar.yaml --launcher pytorch
 workers: 1
 gpusPerWorker: 8
 cpuPerWorker: 32
@@ -847,7 +847,7 @@ entrypoint: python train.py
 func TestSubmitFlagOverridesTheCommittedDefaultForOneRun(t *testing.T) {
 	root := seedProject(t, `name: bevfusion-lidar
 image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
-entrypoint: python tools/westwell_train.py configs/lidar.yaml --launcher pytorch
+entrypoint: python tools/train.py configs/lidar.yaml --launcher pytorch
 workers: 1
 gpusPerWorker: 8
 executionMode: torchrun
@@ -869,7 +869,7 @@ executionMode: torchrun
 	if submitted.Execution.Mode != domain.ExecutionModeSingleGPU {
 		t.Fatalf("expected single_gpu, got %q", submitted.Execution.Mode)
 	}
-	if submitted.Entrypoint.Command[2] != "python tools/westwell_train.py configs/lidar.yaml --launcher pytorch" {
+	if submitted.Entrypoint.Command[2] != "python tools/train.py configs/lidar.yaml --launcher pytorch" {
 		t.Fatalf("untouched values must survive: %+v", submitted.Entrypoint)
 	}
 }
@@ -878,7 +878,7 @@ func TestSubmitResumeFromJobBindsLatestCompleteCheckpointAndParent(t *testing.T)
 	const parentID = "job-0123456789abcdef01234567"
 	root := seedProject(t, `name: bevfusion-lidar
 image: harbor.example/train@sha256:`+strings.Repeat("a", 64)+`
-entrypoint: python tools/westwell_train.py configs/lidar.yaml --launcher pytorch --auto-resume
+entrypoint: python tools/train.py configs/lidar.yaml --launcher pytorch --auto-resume
 engine: ray-train
 workers: 1
 gpusPerWorker: 8

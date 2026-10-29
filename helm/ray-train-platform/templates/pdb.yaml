@@ -3,7 +3,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: ray-train-backend
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: api
@@ -12,20 +12,6 @@ spec:
   selector:
     matchLabels:
       app: ray-train-backend
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: ray-train-frontend
-  namespace: {{ .Values.namespace }}
-  labels:
-    {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
-    app.kubernetes.io/component: portal
-spec:
-  minAvailable: {{ .Values.availability.minAvailable }}
-  selector:
-    matchLabels:
-      app: ray-train-frontend
 {{- $release := default (dict) .Values.spkRayjobRelease }}
 {{- if (default false $release.enabled) }}
 ---
@@ -33,7 +19,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: spk-rayjob-release
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: spk-rayjob-release

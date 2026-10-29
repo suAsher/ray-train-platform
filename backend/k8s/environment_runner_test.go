@@ -24,7 +24,7 @@ import (
 )
 
 func environmentTestRunner() *EnvironmentRunner {
-	image := "harbor.wellspiking.ai/platform/image@sha256:" + strings.Repeat("a", 64)
+	image := "registry.example.com/platform/image@sha256:" + strings.Repeat("a", 64)
 	return NewEnvironmentRunner(NewClientFromInterfaces(nil, fake.NewSimpleClientset()), EnvironmentRunnerConfig{Namespace: "platform", BaseImage: image, WorkspaceImage: image, PrepareImage: image, PublisherImage: image, StorageClass: "ebs-ssd", PullSecretName: "pull-robot", ImagePullSecrets: []string{"pull-robot"}, WheelIndexURL: "https://packages.internal/simple", JobTimeout: time.Hour})
 }
 func environmentTestBuild(r *EnvironmentRunner) environmentbuild.Build {
@@ -129,7 +129,7 @@ func TestEnvironmentJobResultRequiresMatchingOwnerAndDigest(t *testing.T) {
 }
 
 func environmentCompatibleWorkspaceImage() string {
-	return "harbor.wellspiking.ai/platform/old-workspace@sha256:" + strings.Repeat("c", 64)
+	return "registry.example.com/platform/old-workspace@sha256:" + strings.Repeat("c", 64)
 }
 
 func environmentWorkspaceFixture(r *EnvironmentRunner, workspace environmentbuild.Workspace, image string, imageID string) (*unstructured.Unstructured, *corev1.Pod) {
@@ -155,7 +155,7 @@ func TestEnvironmentWorkspaceRequiresManagedClusterAndActualPinnedImage(t *testi
 		t.Fatalf("inspect %+v %v", result, err)
 	}
 	// An index pin cannot silently authorize a different platform-manifest digest.
-	pod.Status.ContainerStatuses[0].ImageID = "harbor.wellspiking.ai/platform/image@sha256:" + strings.Repeat("c", 64)
+	pod.Status.ContainerStatuses[0].ImageID = "registry.example.com/platform/image@sha256:" + strings.Repeat("c", 64)
 	if _, err := r.client.kubernetes.CoreV1().Pods(workspace.Namespace).UpdateStatus(ctx, pod, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestEnvironmentWorkspaceRequiresManagedClusterAndActualPinnedImage(t *testi
 		t.Fatal("accepted another tenant cluster")
 	}
 	workspace.TenantID = "tenant-a"
-	pod.Spec.Containers[0].Image = "harbor.wellspiking.ai/platform/image:latest"
+	pod.Spec.Containers[0].Image = "registry.example.com/platform/image:latest"
 	if _, err := r.client.kubernetes.CoreV1().Pods(workspace.Namespace).Update(ctx, pod, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestEnvironmentWorkspaceRejectsImagesOutsidePrimaryAndCompatibleAllowlist(t
 	r := environmentTestRunner()
 	r.config.CompatibleWorkspaceImages = []string{environmentCompatibleWorkspaceImage()}
 	workspace := environmentbuild.Workspace{ID: "workspace-a", TenantID: "tenant-a", OwnerID: "alice", Namespace: "tenant-a", ResourceName: "workspace-a"}
-	other := "harbor.wellspiking.ai/platform/other-workspace@sha256:" + strings.Repeat("d", 64)
+	other := "registry.example.com/platform/other-workspace@sha256:" + strings.Repeat("d", 64)
 	cluster, pod := environmentWorkspaceFixture(r, workspace, other, other)
 	environmentInstallWorkspaceFixture(r, workspace, pod, cluster)
 	if _, err := r.InspectWorkspace(context.Background(), workspace); err == nil {

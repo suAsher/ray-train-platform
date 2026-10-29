@@ -18,12 +18,18 @@
       </template>
     </el-alert>
 
-    <div class="space-y-5">
+    <el-checkbox v-model="useDataSpaces" class="mb-4">使用可选对象存储数据空间（需要管理员配置）</el-checkbox>
+    <div v-if="!useDataSpaces" class="space-y-5">
+      <StorageDirectoryPicker v-model="form.datasetStorage" kind="dataset" label="训练输入 PVC" help="选择管理员登记的只读训练数据。" />
+      <StorageDirectoryPicker v-model="form.checkpointStorage" kind="checkpoint" label="Checkpoint PVC" help="可选的只读初始权重。" />
+      <StorageDirectoryPicker v-model="form.outputStorage" kind="output" label="训练结果 PVC" help="选择可写的训练产物存储。" output />
+    </div>
+    <div v-else class="space-y-5">
       <DataSpacePicker
         v-if="form.dataMode !== 'streaming'"
         v-model="form.input"
         label="训练输入"
-        help="选择数据从哪里读取。团队、公共和 IDC 数据均只读；可先在“我的数据”中浏览目录。"
+        help="选择数据从哪里读取。团队和公共数据均只读；可先在“我的数据”中浏览目录。"
         :container-path="mountPaths.dataset"
         env-variable="PLATFORM_DATASET_PATH"
       />
@@ -52,11 +58,22 @@
 </template>
 
 <script setup>
+import { ref, watch } from 'vue'
+import StorageDirectoryPicker from '../StorageDirectoryPicker.vue'
 import DataSpacePicker from '../DataSpacePicker.vue'
 import DatasetVersionPicker from '../DatasetVersionPicker.vue'
 
-defineProps({
+const props = defineProps({
   form: { type: Object, required: true },
   mountPaths: { type: Object, required: true },
+})
+const useDataSpaces = ref(Boolean(props.form.input?.spaceId || props.form.checkpoint?.spaceId))
+watch(useDataSpaces, () => {
+  props.form.input = {}
+  props.form.checkpoint = {}
+  props.form.output = {}
+  props.form.datasetStorage = {}
+  props.form.checkpointStorage = {}
+  props.form.outputStorage = {}
 })
 </script>

@@ -6,7 +6,7 @@ readonly helm_bin="${HELM:-helm}"
 readonly rendered_dir="$(mktemp -d)"
 trap 'rm -f -- "${rendered_dir}"/*.yaml "${rendered_dir}/error"; rmdir -- "${rendered_dir}"' EXIT
 readonly image="registry.example/onboarding@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-readonly enabled_args=(--namespace ray-cache-local --set enabled=true --set-string "image=${image}"
+readonly enabled_args=(--namespace ray-cache-local --set enabled=true --set-string "image=${image}" --set-string "helperImage=${image}"
   --set-string 'nfs.shares[0].server=nfs.example' --set-string 'nfs.shares[0].path=/datasets')
 
 "${helm_bin}" lint "${chart_dir}" >/dev/null
@@ -39,12 +39,12 @@ done
 
 cat >"${rendered_dir}/dedicated-values.yaml" <<'YAML'
 dedicatedNodeTenants:
-  172.28.3.32: algorithm
+  gpu-node-reserved: algorithm
 YAML
 "${helm_bin}" template node-onboarding "${chart_dir}" "${enabled_args[@]}" -f "${rendered_dir}/dedicated-values.yaml" >"${rendered_dir}/dedicated.yaml"
-grep -Fq "t.key == 'platform.wellspiking.ai/dedicated-tenant'" "${rendered_dir}/dedicated.yaml"
+grep -Fq "t.key == 'raytrain.io/dedicated-tenant'" "${rendered_dir}/dedicated.yaml"
 grep -Fq "t.operator == 'Equal' && t.effect == 'NoSchedule'" "${rendered_dir}/dedicated.yaml"
-grep -Fq '\"172.28.3.32\":\"algorithm\"' "${rendered_dir}/dedicated.yaml"
+grep -Fq '\"gpu-node-reserved\":\"algorithm\"' "${rendered_dir}/dedicated.yaml"
 grep -Fq 't.value == variables.dedicatedNodeTenants[object.metadata.ownerReferences[0].name]' "${rendered_dir}/dedicated.yaml"
 for tenant in '' 'Team_A' '-algorithm'; do
   printf 'dedicatedNodeTenants:\n  gpu-1: "%s"\n' "${tenant}" >"${rendered_dir}/dedicated-values.yaml"

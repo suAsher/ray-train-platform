@@ -10,7 +10,7 @@ import (
 
 func TestRenderDevRayClusterUsesPVCAndProtectedInternalJupyter(t *testing.T) {
 	workspace := domain.DevWorkspace{ID: "ws-1", TenantID: "tenant-a", UserID: "user-a", Name: "debug-a", Namespace: "tenant-a", RayClusterName: "debug-a", GPUCount: 1, State: domain.WorkspaceSubmitted}
-	manifest, err := RenderDevRayCluster(workspace, WorkspaceRenderOptions{Image: "registry.example/dev@sha256:" + strings.Repeat("a", 64), RayVersion: "2.35.0", IDCExistingClaim: "idc-rwx"})
+	manifest, err := RenderDevRayCluster(workspace, WorkspaceRenderOptions{Image: "registry.example/dev@sha256:" + strings.Repeat("a", 64), RayVersion: "2.35.0"})
 	if err != nil {
 		t.Fatalf("render dev cluster: %v", err)
 	}
@@ -187,28 +187,6 @@ func TestRenderDevRayClusterStartsEditorsInPersistentWorkspace(t *testing.T) {
 	}
 }
 
-func TestRenderDevRayClusterAvoidsLegacyIDCClaimWhenGovernedIDCIsPresent(t *testing.T) {
-	workspace := domain.DevWorkspace{ID: "ws-1", TenantID: "tenant-a", UserID: "user-a", Name: "debug-a", Namespace: "tenant-a", RayClusterName: "debug-a", GPUCount: 1, State: domain.WorkspaceSubmitted}
-	manifest, err := RenderDevRayCluster(workspace, WorkspaceRenderOptions{
-		Image:            "registry.example/dev@sha256:" + strings.Repeat("a", 64),
-		IDCExistingClaim: "legacy-idc-rwx",
-		DataMounts: DataMountPlan{
-			IDCOriginal: &DataMountRoot{ClaimName: "idc-original-ro", ReadOnly: true},
-		},
-	})
-	if err != nil {
-		t.Fatalf("render dev cluster: %v", err)
-	}
-	for group, pod := range map[string]map[string]any{
-		"head":   dataMountDevPodSpec(t, manifest, "head"),
-		"worker": dataMountDevPodSpec(t, manifest, "worker"),
-	} {
-		assertStorageMount(t, pod, "platform-data-idc-original", "idc-original-ro", domain.IDCOriginalMountPath, true)
-		if hasVolumeOrMountNamed(pod, "idc-storage") {
-			t.Fatalf("%s pod must not retain the legacy writable IDC mount when governed IDC is available: %#v", group, pod)
-		}
-	}
-}
 
 func hasVolumeOrMountNamed(podSpec map[string]any, name string) bool {
 	volumes, _, _ := nestedSlice(podSpec, "volumes")

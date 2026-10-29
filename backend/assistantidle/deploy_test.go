@@ -41,22 +41,22 @@ func TestAssistantIdleDeployReferenceMatchesRendererContract(t *testing.T) {
 
 	for _, key := range []string{
 		"\"QueueName\": \"assistant-idle-private-lq\"",
-		"\"platform.wellspiking.ai/gpu-pool\": \"production\"",
-		"\"platform.wellspiking.ai/cache-ready\": \"true\"",
+		"\"raytrain.io/gpu-pool\": \"production\"",
+		"\"raytrain.io/cache-ready\": \"true\"",
 		"\"accelerator\": \"nvidia-rtx-4090\"",
 		"\"ToleratedTaintKeys\": [\"nvidia.com/gpu\"]",
 		"\"ModelPath\": \"/models/Qwen3-8B-AWQ\"",
 	} {
 		mustContain(t, files["config.example.json"], key)
 	}
-	mustNotContain(t, files["config.example.json"], "platform.wellspiking.ai/dedicated-tenant")
+	mustNotContain(t, files["config.example.json"], "raytrain.io/dedicated-tenant")
 
 	np := files["networkpolicy.yaml"]
 	for _, key := range []string{
 		"assistant-idle-default-deny",
 		"assistant-idle-runtime-egress",
 		"assistant-idle-controller-gate",
-		"raytrain.wellspiking.ai/assistant-role: inference",
+		"raytrain.io/assistant-role: inference",
 		"app: ray-train-backend",
 		"app.kubernetes.io/component: api",
 		"port: 8443",

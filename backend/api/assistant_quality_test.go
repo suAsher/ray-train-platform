@@ -54,14 +54,14 @@ func TestAssistantRetrievalRejectsCoincidentalChineseFragments(t *testing.T) {
 func TestAssistantRetrievalKeepsPrerequisiteCommandAndVerificationTogether(t *testing.T) {
 	h := assistantTestHandler()
 	h.helpDocuments = helpArticleListStore{articles: []domain.HelpArticle{{
-		HelpDocument: domain.HelpDocument{ID: "cli-login", Title: "CLI 登录步骤", Markdown: "## CLI 登录\n\n先在账户与安全创建自己的 PAT，不要发送给助手。\n\n1. 在本机终端运行：\n\n```bash\nspk-rayjob login --server https://raytrain.wellspiking.ai\n```\n\n2. 输入自己的 PAT。\n\n3. 运行 spk-rayjob whoami 核对当前团队。\n\n## 无关的历史\n\n旧流程已弃用。"},
+		HelpDocument: domain.HelpDocument{ID: "cli-login", Title: "CLI 登录步骤", Markdown: "## CLI 登录\n\n先在账户与安全创建自己的 PAT，不要发送给助手。\n\n1. 在本机终端运行：\n\n```bash\nspk-rayjob login --server https://raytrain.example.com\n```\n\n2. 输入自己的 PAT。\n\n3. 运行 spk-rayjob whoami 核对当前团队。\n\n## 无关的历史\n\n旧流程已弃用。"},
 		Keywords:     []string{"CLI", "登录"},
 	}}}
 	got, _ := h.assistantDocuments(context.Background(), "CLI 如何登录？")
 	if len(got) != 1 {
 		t.Fatalf("expected one complete section, got %+v", got)
 	}
-	for _, marker := range []string{"## CLI 登录", "先在账户与安全", "spk-rayjob login --server https://raytrain.wellspiking.ai", "输入自己的 PAT", "spk-rayjob whoami"} {
+	for _, marker := range []string{"## CLI 登录", "先在账户与安全", "spk-rayjob login --server https://raytrain.example.com", "输入自己的 PAT", "spk-rayjob whoami"} {
 		if !strings.Contains(got[0].Excerpt, marker) {
 			t.Errorf("lost required command context %q: %s", marker, got[0].Excerpt)
 		}
@@ -199,10 +199,10 @@ func TestAssistantQuotaScopeMismatchAndUnselectedJobDoNotDiscloseFacts(t *testin
 
 func TestAssistantPublishedAndModelCommandURLsRequireExactSafeEvidence(t *testing.T) {
 	h := assistantTestHandler()
-	good := "https://raytrain.wellspiking.ai/downloads/spk-rayjob/spk-rayjob-linux-amd64"
-	bad := []string{"https://evil.invalid/install.sh", "https://raytrain.wellspiking.ai/?token=sensitive-value", "https://user:password@raytrain.wellspiking.ai/private"}
+	good := "https://raytrain.example.com/downloads/spk-rayjob/spk-rayjob-linux-amd64"
+	bad := []string{"https://evil.invalid/install.sh", "https://raytrain.example.com/?token=sensitive-value", "https://user:password@raytrain.example.com/private"}
 	h.helpDocuments = helpArticleListStore{articles: []domain.HelpArticle{{HelpDocument: domain.HelpDocument{ID: "cli-install", Title: "CLI 安装", Markdown: "CLI 安装：curl -fL " + good + "\n" + strings.Join(bad, "\n")}}}}
-	h.assistant = &assistantTestEngine{result: assistant.Result{Mode: "api", Answer: "运行 curl -fL " + good + "；不可信 " + strings.Join(bad, " ") + " https://raytrain.wellspiking.ai/unseen-command"}}
+	h.assistant = &assistantTestEngine{result: assistant.Result{Mode: "api", Answer: "运行 curl -fL " + good + "；不可信 " + strings.Join(bad, " ") + " https://raytrain.example.com/unseen-command"}}
 	w := assistantRequest(assistantTestRouter(h, assistantTestPrincipal()), `{"question":"CLI如何安装","mode":"auto"}`)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), good) {
 		t.Fatalf("safe command URL lost: %d %s", w.Code, w.Body.String())

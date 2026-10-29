@@ -13,10 +13,10 @@ import (
 	"time"
 )
 
-const environmentManagedLabel = "platform.wellspiking.ai/environment-build"
-const environmentOwnerLabel = "platform.wellspiking.ai/environment-owner"
-const environmentIdentityAnnotation = "platform.wellspiking.ai/environment-identity"
-const environmentExpiryAnnotation = "platform.wellspiking.ai/environment-expires-at"
+const environmentManagedLabel = "raytrain.io/environment-build"
+const environmentOwnerLabel = "raytrain.io/environment-owner"
+const environmentIdentityAnnotation = "raytrain.io/environment-identity"
+const environmentExpiryAnnotation = "raytrain.io/environment-expires-at"
 
 func environmentHash(value string) string {
 	sum := sha256.Sum256([]byte(value))

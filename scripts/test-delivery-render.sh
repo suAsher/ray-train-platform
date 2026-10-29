@@ -1,178 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-readonly root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly chart_dir="${root_dir}/helm/ray-train-platform"
-readonly test_profile="${root_dir}/deploy/profiles/test.yaml"
-readonly production_profile="${root_dir}/deploy/profiles/production.yaml.example"
-readonly cpu_ha_profile="${root_dir}/deploy/profiles/vke-cpu-ha.yaml"
-
-for expected in \
-  '  managedEnabled: false' \
-  '  managedTenants: []' \
-  '  canaryEnabled: false' \
-  '  canaryTenants: []' \
-  '  productionVersion: "2.56.1"' \
-  '  canaryVersion: "2.58.0"'; do
-  grep -Fq -- "${expected}" "${chart_dir}/values.yaml" || {
-    echo "default Ray Train feature gate missing: ${expected}" >&2
-    exit 1
-  }
-  grep -Fq -- "${expected}" "${chart_dir}/values-prod.yaml.example" || {
-    echo "production Ray Train feature gate missing: ${expected}" >&2
-    exit 1
-  }
-done
-for expected in RAY_TRAIN_MANAGED_ENABLED RAY_TRAIN_MANAGED_TENANTS RAY_TRAIN_CANARY_ENABLED RAY_TRAIN_CANARY_TENANTS; do
-  grep -Fq -- "${expected}" "${chart_dir}/templates/backend-deployment.yaml" || {
-    echo "backend feature-gate environment missing: ${expected}" >&2
-    exit 1
-  }
-done
-# Helm renders a large plain integer as a float, so `quote` alone would emit
-# "2.592e+06" and the backend would fail to parse its own retention setting at
-# startup. int64 keeps it an integer.
-grep -Fq -- 'rayJobRetentionSeconds | default 2592000 | int64 | quote' "${chart_dir}/templates/backend-deployment.yaml" || {
-  echo 'RAYJOB_RETENTION_SECONDS must render as an integer, not scientific notation' >&2
-  exit 1
-}
-grep -Fq -- 'join "," .Values.rayTrain.managedTenants' "${chart_dir}/templates/backend-deployment.yaml" || {
-  echo 'RAY_TRAIN_MANAGED_TENANTS must render as a comma-separated array' >&2
-  exit 1
-}
-grep -Fq -- 'join "," .Values.rayTrain.canaryTenants' "${chart_dir}/templates/backend-deployment.yaml" || {
-  echo 'RAY_TRAIN_CANARY_TENANTS must render as a comma-separated array' >&2
-  exit 1
-}
-
-for command in helm grep mktemp; do
-  command -v "$command" >/dev/null || { echo "missing command: ${command}" >&2; exit 1; }
-done
-
-test_rendered="$(mktemp)"
-production_rendered="$(mktemp)"
-cpu_ha_rendered="$(mktemp)"
-network_rendered="$(mktemp)"
-canary_rendered="$(mktemp)"
-trap 'rm -f "$test_rendered" "$production_rendered" "$cpu_ha_rendered" "$network_rendered" "$canary_rendered"' EXIT
-
-helm lint "$chart_dir" --values "$test_profile" >/dev/null
-helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$test_profile" >"$test_rendered"
-helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$production_profile" >"$production_rendered"
-helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$cpu_ha_profile" >"$cpu_ha_rendered"
-helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$cpu_ha_profile" --set albInstance.enabled=true >"$network_rendered"
-helm template ray-platform "$chart_dir" --namespace ray-train-platform --values "$test_profile" \
-  --set rayTrain.managedEnabled=true \
-  --set 'rayTrain.managedTenants={tenant-managed-a,tenant-managed-b}' \
-  --set rayTrain.canaryEnabled=true \
-  --set 'rayTrain.canaryTenants={tenant-canary}' >"$canary_rendered"
-
-require() {
-  local file="$1"
-  local expected="$2"
-  grep -Fq -- "$expected" "$file" || { echo "render contract missing: ${expected}" >&2; exit 1; }
-}
-
-require "$test_rendered" 'kind: StatefulSet'
-require "$test_rendered" 'name: postgres'
-require "$test_rendered" 'name: PGDATA'
-require "$test_rendered" 'value: "/var/lib/postgresql/data/pgdata"'
-require "$production_rendered" 'kind: HorizontalPodAutoscaler'
-require "$production_rendered" 'minReplicas: 2'
-require "$production_rendered" 'type: NodePort'
-require "$production_rendered" 'app.kubernetes.io/part-of: ray-train-platform'
-require "$production_rendered" 'app.kubernetes.io/managed-by: Helm'
-require "$cpu_ha_rendered" 'replicas: 2'
-require "$cpu_ha_rendered" 'whenUnsatisfiable: DoNotSchedule'
-require "$cpu_ha_rendered" 'requiredDuringSchedulingIgnoredDuringExecution:'
-require "$cpu_ha_rendered" 'podAntiAffinity:'
-# The 3-node CPU HA profile preserves one available replica while avoiding an
-# unschedulable surge Pod on a fully packed control-plane pool.
-require "$cpu_ha_rendered" 'maxUnavailable: 1'
-require "$cpu_ha_rendered" 'maxSurge: 0'
-require "$cpu_ha_rendered" 'kind: HorizontalPodAutoscaler'
-require "$cpu_ha_rendered" 'name: postgres'
-require "$cpu_ha_rendered" 'name: harbor-registry'
-# The CPU HA profile must always use immutable artifacts, but their exact
-# digest changes on every approved release. Assert repository and digest
-# contract instead of coupling this reusable delivery check to one build.
-require "$cpu_ha_rendered" 'harbor.wellspiking.ai/guofeng.su/ray-train-backend@sha256:'
-require "$cpu_ha_rendered" 'harbor.wellspiking.ai/guofeng.su/ray-train-frontend@sha256:'
-require "$cpu_ha_rendered" 'harbor.wellspiking.ai/guofeng.su/postgres@sha256:'
-require "$cpu_ha_rendered" 'harbor.wellspiking.ai/guofeng.su/ray-workspace@sha256:'
-require "$cpu_ha_rendered" 'harbor.wellspiking.ai/guofeng.su/ray-source-materializer@sha256:'
-require "$cpu_ha_rendered" 'name: LOCAL_CACHE_STORAGE_CLASS_DATA1'
-require "$cpu_ha_rendered" 'value: "ray-cache-local-data1"'
-require "$cpu_ha_rendered" 'name: LOCAL_CACHE_STORAGE_CLASS_DATA2'
-require "$cpu_ha_rendered" 'value: "ray-cache-local-data2"'
-require "$cpu_ha_rendered" 'name: LOCAL_CACHE_MOUNT_PATH_DATA1'
-require "$cpu_ha_rendered" 'value: "/mnt/cache"'
-require "$cpu_ha_rendered" 'name: LOCAL_CACHE_MOUNT_PATH_DATA2'
-require "$cpu_ha_rendered" 'value: "/mnt/cache2"'
-require "$cpu_ha_rendered" 'value: "200Gi,500Gi,1Ti,2Ti,4Ti,5Ti"'
-require "$cpu_ha_rendered" 'value: "5Ti"'
-require "$test_rendered" 'name: RAY_TRAIN_MANAGED_ENABLED'
-require "$test_rendered" 'name: RAY_TRAIN_MANAGED_TENANTS'
-require "$test_rendered" 'name: RAY_TRAIN_CANARY_ENABLED'
-require "$test_rendered" 'name: RAY_TRAIN_CANARY_TENANTS'
-require "$test_rendered" 'value: "false"'
-require "$canary_rendered" 'value: "tenant-managed-a,tenant-managed-b"'
-require "$canary_rendered" 'value: "tenant-canary"'
-require "$cpu_ha_rendered" 'name: spk-rayjob-release'
-require "$cpu_ha_rendered" 'ingressClassName: raytrain-prod-alb'
-require "$network_rendered" 'kind: ALBInstance'
-require "$network_rendered" 'name: raytrain-prod-alb'
-require "$network_rendered" 'instanceID: "alb-1vzdtqufb4hz43766qah8okd5"'
-require "$network_rendered" 'certificateSource: "cert_center"'
-require "$network_rendered" 'certificateID: "cert-8fbe7f999bc3478483e8c8838c73b2b0"'
-if ! awk '
-  $0 == "kind: Service" { in_service = 1; is_release = 0 }
-  in_service && $0 == "  name: spk-rayjob-release" { is_release = 1 }
-  in_service && is_release && $0 == "  type: ClusterIP" { found = 1 }
-  END { exit found ? 0 : 1 }
-' "$cpu_ha_rendered"; then
-  echo 'spk-rayjob release must render as ClusterIP behind the private ALB' >&2
-  exit 1
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+chart=helm/ray-train-platform
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+runtime=registry.example.com/test/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+helper=registry.example.com/test/helper@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+args=(-f deploy/profiles/quickstart.yaml --set backend.workspaceImage="$runtime" --set backend.sourceMaterializerImage="$helper")
+helm lint "$chart" "${args[@]}"
+helm template portable "$chart" -n portable-test "${args[@]}" > "$tmp/default.yaml"
+grep -q 'name: ray-train-backend' "$tmp/default.yaml"
+grep -q 'namespace: portable-test' "$tmp/default.yaml"
+grep -q 'name: PAT_PEPPER' "$tmp/default.yaml"
+grep -q 'name: LOCAL_AUTH_ENABLED' "$tmp/default.yaml"
+grep -q 'kind: ClusterQueue' "$tmp/default.yaml"
+grep -q 'kind: WorkloadPriorityClass' "$tmp/default.yaml"
+if grep -Eq 'wellspiking|IDC_SYNC|STORAGE_SYNC|ray-train-frontend|kind: ALBInstance|hostPath:' "$tmp/default.yaml"; then
+  echo 'Private integration or separate frontend leaked into portable chart' >&2; exit 1
 fi
-require "$cpu_ha_rendered" 'raytrain.wellspiking.ai'
-require "$cpu_ha_rendered" 'path: /downloads/spk-rayjob/'
-if awk '
-  $0 == "  name: ray-platform-rayctl-https-ingress" { in_ingress = 1 }
-  in_ingress && $0 == "---" { exit found ? 0 : 1 }
-  in_ingress && $0 == "  tls:" { found = 1 }
-  END { exit found ? 0 : 1 }
-' "$cpu_ha_rendered"; then
-  echo 'production ALBInstance certificate mode must not depend on the beta native Secret TLS flow' >&2
-  exit 1
+helm template portable "$chart" -n portable-test "${args[@]}" --set ingress.enabled=true --set ingress.host=training.example.com > "$tmp/ingress.yaml"
+grep -q 'kind: Ingress' "$tmp/ingress.yaml"
+grep -q 'number: 8080' "$tmp/ingress.yaml"
+if helm template portable "$chart" "${args[@]}" --set backend.sourceMaterializerImage=unsafe:latest > /dev/null 2>&1; then
+  echo 'Unpinned helper image was accepted' >&2; exit 1
 fi
-if ! awk '
-  $0 == "  name: ray-platform-rayctl-https-ingress" { in_ingress = 1 }
-  in_ingress && $0 == "                name: spk-rayjob-release" { is_release_backend = 1 }
-  in_ingress && is_release_backend && $0 == "                  number: 8080" { found = 1 }
-  END { exit found ? 0 : 1 }
-' "$cpu_ha_rendered"; then
-  echo 'spk-rayjob HTTPS ingress must use the concrete ClusterIP service port' >&2
-  exit 1
+if helm template portable "$chart" "${args[@]}" --set kueue.topology.teamNodeAffinityEnabled=true > /dev/null 2>&1; then
+  echo 'Team affinity without TAS was accepted' >&2; exit 1
 fi
-if grep -A 8 'kind: StatefulSet' "$production_rendered" | grep -Fq 'name: postgres'; then
-  echo 'production profile must not render the standalone PostgreSQL StatefulSet' >&2
-  exit 1
-fi
-
-echo 'delivery render contract verified'
-bash "${root_dir}/ops/platform/test/secret-restore-namespace-test.sh"
-bash "${root_dir}/ops/platform/test/preflight-storage-image-test.sh"
-bash "${root_dir}/ops/platform/test/fsx-prefix-verification-sequence-test.sh"
-bash "${root_dir}/ops/platform/test/postgres-pull-secret-template-test.sh"
-bash "${root_dir}/ops/platform/test/loki-cpu-fullname-test.sh"
-bash "${root_dir}/ops/observability/loki/test/direct-client-paths-test.sh"
-bash "${root_dir}/ops/platform/test/preflight-managed-ingress-class-test.sh"
-bash "${root_dir}/ops/platform/test/preflight-local-cache-test.sh"
-bash "${root_dir}/ops/platform/test/bootstrap-alb-contract-test.sh"
-bash "${root_dir}/ops/platform/test/verify-rendered-ingress-test.sh"
-bash "${root_dir}/ops/platform/test/portal-raytrain-ingress-test.sh"
-bash "${root_dir}/ops/platform/test/ha-rollout-template-test.sh"
-bash "${root_dir}/scripts/test-external-spk-rayjob-e2e-contract.sh"
-bash "${root_dir}/scripts/test-go-builder-path-contract.sh"
-bash "${root_dir}/scripts/test-ray-runtime-images.sh" --contract-only
-bash "${root_dir}/scripts/test-nvme-cache-delivery.sh"
+echo 'Portable Helm contract passed'

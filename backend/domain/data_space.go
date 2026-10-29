@@ -16,6 +16,8 @@ type DataSpaceID string
 // level whole-file limit.
 const MaxDataSpaceUploadBytes int64 = DataSpaceMultipartThresholdBytes
 
+// Legacy company identifiers below are retained only for decoding old records;
+// they are absent from IsKnownDataSpace and cannot be selected or mounted.
 const (
 	DataSpaceWellspikingPersonal DataSpaceID = "wellspiking-personal"
 	DataSpaceWorkspace           DataSpaceID = "workspace"
@@ -186,26 +188,6 @@ func personalDataSpacesForRoot(tenantID, personalRoot, publicRoot string) ([]Dat
 			Provider: StorageProviderTOS, MountPath: PublicStorageMountPath, ReadOnly: true, BrowseEnabled: true,
 			RootPrefix: publicRoot,
 		},
-		{
-			ID: DataSpaceIDCOriginal, Name: "IDC 原始数据", Description: "IDC 只读原始数据",
-			Provider: StorageProviderIDC, MountPath: IDCOriginalMountPath, ReadOnly: true,
-		},
-		{
-			ID: DataSpaceIDCWellspiking, Name: "IDC Wellspiking 数据", Description: "IDC 只读 Wellspiking 数据",
-			Provider: StorageProviderIDC, MountPath: IDCWellspikingMountPath, ReadOnly: true,
-		},
-		{
-			ID: DataSpaceIDCShared, Name: "IDC 共享数据", Description: "IDC 只读共享数据",
-			Provider: StorageProviderIDC, MountPath: IDCSharedMountPath, ReadOnly: true,
-		},
-		{
-			ID: DataSpaceIDCSPKHybrid, Name: "IDC SPK Hybrid 数据", Description: "IDC 只读混合存储数据",
-			Provider: StorageProviderIDC, MountPath: IDCSPKHybridMountPath, ReadOnly: true,
-		},
-		{
-			ID: DataSpaceIDCSPKSSD, Name: "IDC SPK SSD 数据", Description: "IDC 只读 SSD 存储数据",
-			Provider: StorageProviderIDC, MountPath: IDCSPKSSDMountPath, ReadOnly: true,
-		},
 	}
 	return spaces, nil
 }
@@ -264,8 +246,7 @@ func FindDataSpace(spaces []DataSpace, id DataSpaceID) (DataSpace, bool) {
 
 func IsKnownDataSpace(id DataSpaceID) bool {
 	for _, candidate := range []DataSpaceID{
-		DataSpaceWellspikingPersonal, DataSpaceWorkspace, DataSpaceMyStorage, DataSpaceMyFiles, DataSpaceMyRuns, DataSpaceTeamShared, DataSpacePublic,
-		DataSpaceIDCOriginal, DataSpaceIDCWellspiking, DataSpaceIDCShared, DataSpaceIDCSPKHybrid, DataSpaceIDCSPKSSD,
+		DataSpaceWorkspace, DataSpaceMyStorage, DataSpaceMyFiles, DataSpaceMyRuns, DataSpaceTeamShared, DataSpacePublic,
 	} {
 		if id == candidate {
 			return true

@@ -99,7 +99,7 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
   2. 不要把 PAT 写进命令、Git 或脚本，使用标准输入登录：
        read -rs SPK_PAT && echo
        printf '%s\n' "$SPK_PAT" | spk-rayjob login \
-         --server https://raytrain.wellspiking.ai --token-stdin
+         --server https://raytrain.example.com --token-stdin
        unset SPK_PAT
   3. 执行 spk-rayjob login-check。INVALID_AUTHENTICATION 表示 PAT 已过期、撤销或复制错误。
   过渡期本地账号可用 --username <账号> --password-stdin；统一认证用户应使用 PAT。
@@ -113,7 +113,7 @@ const helpText = `spk-rayjob — 分布式训练任务命令行客户端
 
 .spk-rayjob.yaml 示例（Ray Train 两个 Worker）：
   name: my-training
-  image: harbor.wellspiking.ai/<project>/<image>:<tag>
+  image: registry.example.com/<project>/<image>:<tag>
   engine: ray-train
   dataMode: mount
   executionMode: ray_train
@@ -454,7 +454,7 @@ func runLogin(ctx context.Context, arguments []string, stdin io.Reader, stdout, 
 		return errors.New("usage: spk-rayjob login --server https://<平台地址> [--username <账号>]")
 	}
 	if strings.TrimSpace(connection.server) == "" {
-		return errors.New("login requires --server, for example: spk-rayjob login --server https://raytrain.wellspiking.ai")
+		return errors.New("login requires --server, for example: spk-rayjob login --server https://raytrain.example.com")
 	}
 	if *tokenStdin && *passwordStdin {
 		return errors.New("login accepts either --token-stdin or --password-stdin, not both")

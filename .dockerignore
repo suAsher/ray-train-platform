@@ -6,3 +6,13 @@
 **/.pytest_cache
 **/dist
 **/.DS_Store
+**/.env
+**/.env.local
+**/*.pem
+**/*.key
+**/kubeconfig
+.idea
+.agents
+.claude
+docs
+ops

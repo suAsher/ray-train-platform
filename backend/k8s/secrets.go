@@ -14,12 +14,12 @@ import (
 
 const imagePullSecretSourceLabel = "ray-train-platform/source-secret"
 
-const idcSFTPPrivateKeySecretLabel = "platform.wellspiking.ai/idc-sftp-key"
+const idcSFTPPrivateKeySecretLabel = "raytrain.io/idc-sftp-key"
 
 const (
 	TrainingEventTokenBytes = 32
 	TrainingEventTokenKey   = "token"
-	trainingEventJobLabel   = "platform.wellspiking.ai/training-event-job"
+	trainingEventJobLabel   = "raytrain.io/training-event-job"
 )
 
 func TrainingEventSecretName(jobID string) string {

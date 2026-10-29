@@ -1,13 +1,10 @@
-namespace: ray-train-platform
-
 release:
-  # Test profiles may use a release tag. Production profiles require digests
-  # so a Helm revision always identifies exact Portal and API images.
+  # Development may use a tag; production requires the unified image digest.
   requireImageDigests: false
 
 global:
   imagePullPolicy: IfNotPresent
-  imageRegistry: cr-cn-beijing.volces.com/ray-platform
+  imageRegistry: ghcr.io/suasher
   imagePullSecrets: []
 
 # Portable placement policy for platform-owned workloads. A cluster profile
@@ -73,8 +70,10 @@ backend:
   # Optional scheduling boundary for control-plane Pods. Production profiles
   # use the dedicated CPU node pool; the default remains portable.
   nodeSelector: {}
-  appEnv: production
-  oidcRequired: true
+  appEnv: development
+  oidcRequired: false
+  # Independent browser login opt-in; API bearer OIDC can coexist with local UI login.
+  webOIDCEnabled: false
   # OAuth2 Proxy forwards X-Auth-Request-Access-Token; the backend verifies
   # that signed token with the OIDC settings below. Raw identity/group headers
   # are never trusted on their own because the CLI endpoint is also reachable.
@@ -96,8 +95,8 @@ backend:
   # flag. It uses this administrator-pinned 1xGPU runtime by default.
   rayAPIDefaultImage: ""
   image:
-    repository: ray-train-backend
-    tag: "REPLACE_WITH_IMMUTABLE_TAG"
+    repository: ray-train-platform
+    tag: "dev"
     digest: ""
   service:
     type: ClusterIP
@@ -113,7 +112,7 @@ backend:
     existingSecret: ray-platform-postgres
     secretKey: DATABASE_URL
   oidc:
-    issuerURL: "https://keycloak.idc.example/realms/ai"
+    issuerURL: ""
     clientID: ray-training-platform
     audience: ray-training-platform-api
     groupPrefix: platform/tenants/
@@ -137,8 +136,8 @@ backend:
     autoProvisionEnabled: false
     defaultTenant: local
   # Stable in-cluster Loki gateway. The backend appends /loki/api/v1 paths.
-  lokiURL: "http://loki-gateway.loki.svc.cluster.local"
-  prometheusURL: "http://prometheus.monitoring.svc.cluster.local:9090"
+  lokiURL: ""
+  prometheusURL: ""
   mlflow:
     # Opt-in: a control-plane upgrade must not change Ray workloads before the
     # internal MLflow service has passed its own readiness checks.
@@ -155,7 +154,7 @@ backend:
     experimentPrefix: raytrain
   corsOrigins: []
   imageAllowlist:
-    - cr-cn-beijing.volces.com/ray-platform/ray-train
+    - rayproject/ray
   # Finished RayJobs, their submitter Job and Pod are released this long after a
   # run ends. KubeRay's own TTL only tears down the RayCluster, so without this
   # those objects accumulate for the lifetime of the cluster. Matches the log
@@ -168,10 +167,11 @@ backend:
   # Optional self-service environment publication; never changes workspace/base defaults.
   environmentBuilds:
     enabled: false
+    nodeSelector: {}
     # Enable another destination only after the backend and publisher rollout.
-    # Source runtime images and the first global imagePullSecret stay Wellspiking.
+    # Register explicitly trusted registry hosts.
     registryHosts:
-      - harbor.wellspiking.ai
+      - ghcr.io
     baseImage: ""
     workspaceImage: ""
     # Explicit previous debug digests using this same base/capture contract.
@@ -183,7 +183,7 @@ backend:
     prepareImage: ""
     publisherImage: ""
     wheelIndexURL: ""
-    storageClass: ebs-ssd
+    storageClass: ""
     authKeySecretName: ""
   sourceMaterializerImage: "REPLACE_WITH_IMMUTABLE_SOURCE_MATERIALIZER_IMAGE"
   rayVersion: "2.35.0"
@@ -217,7 +217,7 @@ datasetPublisher:
     existingSecret: ""
   image:
     repository: ray-dataset-publisher
-    tag: "REPLACE_WITH_IMMUTABLE_TAG"
+    tag: "dev"
     digest: ""
   imagePullPolicy: ""
   kueue:
@@ -267,38 +267,13 @@ datasetPublisher:
   nodeSelector: {}
   tolerations: []
 
-frontend:
-  replicaCount: 2
-  # Optional scheduling boundary for Portal Pods.
-  nodeSelector: {}
-  image:
-    repository: ray-train-frontend
-    tag: "REPLACE_WITH_IMMUTABLE_TAG"
-    digest: ""
-  service:
-    type: ClusterIP
-    port: 80
-  resources:
-    limits:
-      cpu: 1000m
-      memory: 1Gi
-    requests:
-      cpu: 200m
-      memory: 256Mi
-
-  runtimeConfig:
-    authRequired: true
-    keycloakURL: "https://keycloak.idc.example"
-    keycloakRealm: ai
-    keycloakClientID: ray-training-platform
-
 spkRayjobRelease:
   enabled: false
   replicaCount: 2
   nodeSelector: {}
   image:
     repository: spk-rayjob-release
-    tag: "REPLACE_WITH_IMMUTABLE_TAG"
+    tag: "dev"
     digest: ""
   service:
     type: ClusterIP
@@ -312,74 +287,21 @@ spkRayjobRelease:
       memory: 64Mi
 
 ingress:
-  enabled: true
-  className: alb
-  host: ai-training.internal.example
-  annotations:
-    ingress.vke.volcengine.com/loadbalancer-type: private
-    # Pod pass-through lets the VKE ALB target ClusterIP Service endpoints;
-    # without it, the controller requires NodePort or LoadBalancer Services.
-    ingress.vke.volcengine.com/loadbalancer-pass-through: "true"
-    ingress.vke.volcengine.com/loadbalancer-port: "80"
-    ingress.vke.volcengine.com/request-timeout: "3600"
-    ingress.vke.volcengine.com/keepalive-timeout: "3600"
-  https:
-    enabled: false
-    host: ""
-    className: ""
-    # native-secret is VKE beta. Production uses alb-instance and binds the
-    # Certificate Center ID on a dedicated private ALBInstance.
-    certificateMode: native-secret
-    tlsSecretName: ""
-    annotations:
-      ingress.vke.volcengine.com/loadbalancer-type: private
-      # Keep this aligned with the HTTP ingress: platform Services remain
-      # internal ClusterIP Services and are not exposed through NodePort.
-      ingress.vke.volcengine.com/loadbalancer-pass-through: "true"
-      ingress.vke.volcengine.com/loadbalancer-port: "443"
-      ingress.vke.volcengine.com/loadbalancer-protocol: https
-      ingress.vke.volcengine.com/request-timeout: "3600"
-      ingress.vke.volcengine.com/keepalive-timeout: "3600"
-
-# A dedicated private VKE ALB and its cluster-scoped IngressClass. It is
-# intentionally disabled by default because subnet IDs and certificate IDs are
-# environment-specific. blockCascadeDeletion protects the cloud ALB when a
-# Helm release is removed.
-albInstance:
   enabled: false
-  name: ""
   className: ""
-  instance:
-    # Set only when adopting an existing private ALB. Otherwise the bootstrap
-    # operation creates one from name/zoneMappings.
-    instanceID: ""
-    name: ""
-    edition: Basic
-    addressType: private
-    ipVersion: ipv4
-    deleteProtection: "on"
-    zoneMappings: []
-  https:
-    host: ""
-    certificateSource: cert_center
-    certificateID: ""
-    # Optional existing ALB customized configuration. Production large-file
-    # upload should set client_max_body_size to at least 5120M and disable
-    # proxy_request_buffering so dynamic TOS parts can reach their 5 GiB max.
-    customizedCfgID: ""
+  host: ""
+  annotations: {}
+  tls: []
 
-# Where Ray head and worker Pods are allowed to run. Comma-separated
-# key=value labels. Adding GPU machines only means labelling them the same way
-# and raising the Kueue quota below — no image rebuild.
 training:
-  nodeSelector: "accelerator=nvidia-rtx-4090"
+  nodeSelector: ""
   # Exclusive tenant-to-node assignments for new training and workspace resources.
   # Assigned teams can use only their listed nodes; all other teams exclude them.
   # Existing running resources are preserved. Empty mapping keeps shared placement.
-  # Example: {algorithm: ["172.28.3.32"]}
+  # Example: {research: ["gpu-node-a"]}
   dedicatedNodes: {}
-  # Largest single job the platform accepts. Defaults match a 3 × 8 fleet;
-  # raise them when machines are added — values change only, no rebuild.
+  # Administrative upper bounds; configure for your pool. Live capacity is
+  # validated separately, so aggregate limits do not promise GPU availability.
   maxWorkerReplicas: 3
   maxGPUsPerWorker: 8
   maxTotalGPUs: 24
@@ -422,138 +344,6 @@ dataSpaces:
   # Standard public dataset root. A temporary value is accepted only as
   # ray-train/tenants/<tenant>/datasets/public during a controlled migration.
   publicRoot: ray-train/public
-
-# Native TOS ObjectSet hard quotas for personal roots. This is independent of
-# FSX mounting: it can be prepared before GPU nodes or CSI IRSA are ready, and
-# never gives a workload Pod an AK/SK. The SuperAdmin initializes the bucket
-# layout once from the Portal before accounts are provisioned with a quota.
-personalStorage:
-  # Independent per-user SFTP storage. Never a team credential or remote root.
-  enabled: false
-  # Explicit rollout scope; does not attest upstream isolation configuration.
-  # Mutually exclusive with any nonempty testOwnerIDs list.
-  allUsersEnabled: false
-  personalRootIsolationVerified: false
-  # Temporary, explicitly validated personal accounts only. Stable platform
-  # user IDs; never usernames or tenant IDs. Empty does not enable test mode.
-  testOwnerIDs: []
-  host: ""
-  port: 22
-  existingKnownHostsSecret: ""
-  knownHostsKey: known_hosts
-  mountCapacity: 1Ti
-  maxUploadBytes: 67108864
-  csi:
-    enabled: false
-    image:
-      repository: ray-personal-storage-csi
-      tag: ""
-      digest: ""
-    registrarImage: ""
-    kubeletRoot: /var/lib/kubelet
-  objectSetQuota:
-    enabled: false
-    defaultQuota: 100Gi
-    maxQuota: 10Ti
-
-# Administrator-configured IDC NFS exports. This replaces the legacy single
-# storage.existingClaim compatibility path. Each enabled tenant gets three
-# retained ReadOnlyMany PVC adapters, mounted in workloads at /mnt/.*.
-# Do not put user-specific mount paths or personal SSHFS credentials here.
-idcDataSpaces:
-  enabled: false
-  mountCapacity: 1Pi
-  sources:
-    original:
-      server: ""
-      path: ""
-      mountOptions: []
-    wellspiking:
-      server: ""
-      path: ""
-      mountOptions: []
-    shared:
-      server: ""
-      path: ""
-      mountOptions: []
-    spk-hybrid:
-      server: ""
-      path: ""
-      mountOptions: []
-    spk-ssd:
-      server: ""
-      path: ""
-      mountOptions: []
-
-# Disabled by default. When enabled, a platform-owned CPU Job reads only the
-# configured `original` NFS export and uses an existing administrator-created
-# Secret whose `config` key is a tosutil configuration file. The Job has no
-# user-supplied endpoint, credential, command, or delete operation.
-idcSync:
-  enabled: false
-  image:
-    repository: ray-idc-sync
-    tag: "REPLACE_WITH_IMMUTABLE_TAG"
-    digest: ""
-  bucket: ""
-  tosutilConfigSecret: ""
-  serviceAccountName: ray-idc-sync
-  # Platform-owned persistent workspace for resumable tosutil checkpoints.
-  # Required before IDC sync can be enabled.
-  workClaimName: ""
-
-# Independent administrator copy workflow; leaves legacy IDC ingestion intact.
-# Enable only after validating CPU-node routing, NFS access and a Bound work PVC.
-# Static credentials never permit takeover from an unconfirmed old writer.
-storageSync:
-  enabled: false
-  # Empty preserves the platform namespace for existing installations.
-  # Prefer a dedicated namespace for new installations; migrate checkpoint PVC
-  # contents before changing this on an existing installation.
-  namespace: ""
-  createNamespace: false
-  # Extra operator-approved namespaces containing old executors. The execution
-  # namespace is always included. Old namespaces receive GC-only Job RBAC.
-  gcNamespaces: []
-  # Retention is armed only after durable receipts and confirmed termination.
-  gcSucceededTTLSeconds: 3600
-  gcFailedTTLSeconds: 86400
-  image:
-    repository: ray-storage-sync
-    tag: "REPLACE_WITH_IMMUTABLE_TAG"
-    digest: ""
-  bucket: ""
-  region: ""
-  endpoint: ""
-  credentialMode: static-secret
-  # Existing administrator-created Secret in storageSync.namespace; key config
-  # is a tosutil config. Global imagePullSecrets must also exist in that namespace.
-  # This chart never copies credential or registry Secrets across namespaces.
-  # Read-only browse/preview workers never receive this Secret.
-  credentialSecret: ""
-  serviceAccountName: ray-storage-sync
-  # Empty uses the backend Service FQDN in the platform namespace.
-  callbackBaseURL: ""
-  nodeSelector: {}
-  workClaimName: ""
-  workVolume:
-    create: false
-    storageClassName: ""
-    accessModes: [ReadWriteOnce]
-    size: 20Gi
-  resources:
-    requests:
-      cpu: 500m
-      memory: 512Mi
-      ephemeral-storage: 256Mi
-    limits:
-      cpu: "2"
-      memory: 2Gi
-      ephemeral-storage: 1Gi
-  maxActiveRuns: 1
-  maxFileConcurrency: 4
-  maxPartConcurrency: 2
-  maxBandwidthBytesPerSecond: 104857600
 
 kueue:
   enabled: false
@@ -636,18 +426,6 @@ kueue:
         accelerator: nvidia-h20
       gpuQuota: 0
 
-storage:
-  # Deprecated compatibility switch. Keep false: governed IDC data uses the
-  # idcDataSpaces section above, never a single shared arbitrary PVC.
-  enabled: false
-  existingClaim: ""
-  storageClass: ""
-  size: 2Ti
-  accessModes:
-    - ReadWriteMany
-  tenantNamespaces: []
-  mountPath: /mnt/idc
-
 networkPolicy:
   enabled: true
 
@@ -667,11 +445,6 @@ availability:
 
 autoscaling:
   backend:
-    enabled: false
-    minReplicas: 2
-    maxReplicas: 6
-    targetCPUUtilizationPercentage: 70
-  frontend:
     enabled: false
     minReplicas: 2
     maxReplicas: 6
@@ -714,12 +487,12 @@ tos:
   endpoint: "https://tos-cn-beijing.volces.com"
   region: "cn-beijing"
   bucket: ""
-  secretName: "tos-credentials"
+  secretName: ""
 
 postgres:
   # standalone is a disposable test database only. Production uses `external`
   # and references a managed/HA PostgreSQL DATABASE_URL Secret.
-  mode: external
+  mode: standalone
   existingSecret: ray-platform-postgres
   standalone:
     image: docker.io/library/postgres:16-alpine

@@ -102,7 +102,7 @@ func TestRenderDatasetPublicationJobIsSecureCPUOnlyAndImmutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Annotations["platform.wellspiking.ai/publication-spec-sha256"] != job.Annotations["platform.wellspiking.ai/publication-spec-sha256"] {
+	if second.Annotations["raytrain.io/publication-spec-sha256"] != job.Annotations["raytrain.io/publication-spec-sha256"] {
 		t.Fatal("canonical spec hash is not stable")
 	}
 	changed := spec.deepCopy()
@@ -111,7 +111,7 @@ func TestRenderDatasetPublicationJobIsSecureCPUOnlyAndImmutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changedJob.Annotations["platform.wellspiking.ai/publication-spec-sha256"] == job.Annotations["platform.wellspiking.ai/publication-spec-sha256"] {
+	if changedJob.Annotations["raytrain.io/publication-spec-sha256"] == job.Annotations["raytrain.io/publication-spec-sha256"] {
 		t.Fatal("canonical spec hash did not bind source index")
 	}
 }
@@ -907,18 +907,18 @@ func assertPublicationIdentityMetadata(t *testing.T, job *batchv1.Job, spec fake
 	t.Helper()
 	annotations := job.Annotations
 	wantAnnotations := map[string]string{
-		"platform.wellspiking.ai/publication-run-id": spec.runID,
-		"platform.wellspiking.ai/dataset-id":         spec.datasetID,
-		"platform.wellspiking.ai/dataset-version-id": spec.datasetVersionID,
-		"platform.wellspiking.ai/dataset-version":    spec.version,
-		"platform.wellspiking.ai/schema-version":     spec.schemaVersion,
+		"raytrain.io/publication-run-id": spec.runID,
+		"raytrain.io/dataset-id":         spec.datasetID,
+		"raytrain.io/dataset-version-id": spec.datasetVersionID,
+		"raytrain.io/dataset-version":    spec.version,
+		"raytrain.io/schema-version":     spec.schemaVersion,
 	}
 	for key, value := range wantAnnotations {
 		if annotations[key] != value {
 			t.Fatalf("annotation %q=%q, want %q", key, annotations[key], value)
 		}
 	}
-	specHash := annotations["platform.wellspiking.ai/publication-spec-sha256"]
+	specHash := annotations["raytrain.io/publication-spec-sha256"]
 	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(specHash) {
 		t.Fatalf("spec hash=%q", specHash)
 	}
@@ -927,17 +927,17 @@ func assertPublicationIdentityMetadata(t *testing.T, job *batchv1.Job, spec fake
 		"app.kubernetes.io/managed-by":                 "ray-train-platform",
 		"app.kubernetes.io/name":                       "dataset-publisher",
 		"kueue.x-k8s.io/queue-name":                    spec.queueName,
-		"platform.wellspiking.ai/publication-job-name": spec.name,
+		"raytrain.io/publication-job-name": spec.name,
 	} {
 		if labels[key] != value {
 			t.Fatalf("label %q=%q, want %q", key, labels[key], value)
 		}
 	}
 	for _, key := range []string{
-		"platform.wellspiking.ai/publication-run-hash",
-		"platform.wellspiking.ai/dataset-hash",
-		"platform.wellspiking.ai/dataset-version-hash",
-		"platform.wellspiking.ai/version-hash",
+		"raytrain.io/publication-run-hash",
+		"raytrain.io/dataset-hash",
+		"raytrain.io/dataset-version-hash",
+		"raytrain.io/version-hash",
 	} {
 		if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(labels[key]) {
 			t.Fatalf("bounded identity label %q=%q", key, labels[key])
@@ -1009,8 +1009,8 @@ func publicationJobSpecForTest() fakePublicationJobSpec {
 		imagePullPolicy: "IfNotPresent", serviceAccountName: "dataset-publisher",
 		queueName: "dataset-publisher-low", priorityClassName: "dataset-publisher-low",
 		workingDirectory: "/data/output", internalPrefix: domain.DefaultDatasetInternalPrefix,
-		nodeSelector:          map[string]string{"platform.wellspiking.ai/pool": "cpu"},
-		preferredNodeSelector: map[string]string{"platform.wellspiking.ai/fallback": "gpu"},
+		nodeSelector:          map[string]string{"raytrain.io/pool": "cpu"},
+		preferredNodeSelector: map[string]string{"raytrain.io/fallback": "gpu"},
 		tolerations: []datasetpublisher.PublicationToleration{{
 			Key: "workload", Operator: "Equal", Value: "cpu", Effect: "NoExecute", Seconds: 30, HasSeconds: true,
 		}},
@@ -1020,7 +1020,7 @@ func publicationJobSpecForTest() fakePublicationJobSpec {
 			"app.kubernetes.io/managed-by":                 "ray-train-platform",
 			"app.kubernetes.io/name":                       "dataset-publisher",
 			"kueue.x-k8s.io/queue-name":                    "dataset-publisher-low",
-			"platform.wellspiking.ai/publication-job-name": name,
+			"raytrain.io/publication-job-name": name,
 		},
 	}
 }

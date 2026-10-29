@@ -20,8 +20,8 @@ def response(base, path, origin, method="GET"):
 def verify(base):
     metadata = "/downloads/spk-rayjob/release.json"
     for origin in (
-        "https://spiking.wellspiking.ai",
-        "https://spiking-dev.wellspiking.ai",
+        "https://training.example.com",
+        "https://training-dev.example.com",
     ):
         with response(base, metadata, origin) as result:
             assert result.status == 200, (origin, result.status)

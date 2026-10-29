@@ -14,7 +14,6 @@ import (
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
 	"ray-train-platform-backend/k8s"
-	"ray-train-platform-backend/personalstorage"
 	"ray-train-platform-backend/repositories"
 )
 
@@ -69,7 +68,7 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 		h.writeSuccess(c, http.StatusOK, existing)
 		return
 	}
-	if h.dataSpacesEnabled || h.idcDataSpacesEnabled {
+	if h.dataSpacesEnabled {
 		if err := h.ensureDataSpacesForPrincipal(c.Request.Context(), principal); err != nil {
 			h.writeError(c, http.StatusServiceUnavailable, "DATA_SPACE_INITIALIZATION_FAILED", "could not initialize the selected data spaces; inspect platform storage readiness and try again")
 			return
@@ -81,11 +80,6 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 	}
 	if err := domain.ValidateRuntimeImage(image.Reference); err != nil {
 		h.writeError(c, http.StatusBadRequest, "WORKSPACE_IMAGE_REQUIRED", err.Error())
-		return
-	}
-	personalClaim, personalErr := h.resolveWorkspacePersonalStorage(c.Request.Context(), principal)
-	if personalErr != nil {
-		h.writeError(c, http.StatusConflict, "PERSONAL_STORAGE_MOUNT_NOT_READY", "your Wellspiking personal directory is not ready; verify its connection and storage mount before starting a new workspace")
 		return
 	}
 	dataMounts, err := h.resolveWorkspaceDataMountPlan(c.Request.Context(), principal)
@@ -160,7 +154,7 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 			return fail(http.StatusBadGateway, "WORKSPACE_RUNTIME_PREPARE_FAILED", "could not prepare the tenant workspace runtime", domain.WorkspaceFailed)
 		}
 		workerNodePreference := h.workspaceWorkerNodePreference(ctx, *locked, accelerator, nodeSelector)
-		manifest, err := k8s.RenderDevRayCluster(*locked, k8s.WorkspaceRenderOptions{PersonalStorageClaim: personalClaim, WorkerNodeAffinityPreference: workerNodePreference, NodeSelector: nodeSelector, DedicatedNodes: h.trainingDedicatedNodes, Image: image.Reference, RayVersion: image.RayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, IDCExistingClaim: h.idcClaim, IDCMountPath: h.idcMountPath, JupyterBasePath: locked.JupyterURL, DataMounts: dataMounts})
+		manifest, err := k8s.RenderDevRayCluster(*locked, k8s.WorkspaceRenderOptions{WorkerNodeAffinityPreference: workerNodePreference, NodeSelector: nodeSelector, DedicatedNodes: h.trainingDedicatedNodes, Image: image.Reference, RayVersion: image.RayVersion, ServiceAccount: h.serviceAccount, ImagePullSecrets: h.imagePullSecrets, JupyterBasePath: locked.JupyterURL, DataMounts: dataMounts})
 		if err != nil {
 			return fail(http.StatusBadRequest, "WORKSPACE_SPEC_INVALID", err.Error(), domain.WorkspaceFailed)
 		}
@@ -184,7 +178,7 @@ func (h *Handler) launchWorkspace(c *gin.Context) {
 }
 
 func (h *Handler) resolveWorkspaceDataMountPlan(ctx context.Context, principal auth.Principal) (k8s.DataMountPlan, error) {
-	if !h.dataSpacesEnabled && !h.idcDataSpacesEnabled {
+	if !h.dataSpacesEnabled {
 		return k8s.DataMountPlan{}, nil
 	}
 	if h.dataSpaces == nil {
@@ -196,7 +190,7 @@ func (h *Handler) resolveWorkspaceDataMountPlan(ctx context.Context, principal a
 	}
 	ready := make(map[domain.DataSpaceID]domain.DataMountBinding, len(bindings))
 	for _, binding := range bindings {
-		if binding.Status == domain.DataMountBindingReady && bindingVisibleToPrincipal(binding, principal) && dataSpaceMountingEnabled(binding.SpaceID, h.dataSpacesEnabled, h.idcDataSpacesEnabled) {
+		if binding.Status == domain.DataMountBindingReady && bindingVisibleToPrincipal(binding, principal) && dataSpaceMountingEnabled(binding.SpaceID, h.dataSpacesEnabled, false) {
 			ready[binding.SpaceID] = binding
 		}
 	}
@@ -235,15 +229,11 @@ func (h *Handler) resolveWorkspaceDataMountPlan(ctx context.Context, principal a
 	}
 	plan := k8s.DataMountPlan{
 		Personal: root(domain.DataSpaceWorkspace, false), Team: root(domain.DataSpaceTeamShared, false), Public: root(domain.DataSpacePublic, true),
-		IDCOriginal: root(domain.DataSpaceIDCOriginal, true), IDCWellspiking: root(domain.DataSpaceIDCWellspiking, true), IDCShared: root(domain.DataSpaceIDCShared, true), IDCSPKHybrid: root(domain.DataSpaceIDCSPKHybrid, true), IDCSPKSSD: root(domain.DataSpaceIDCSPKSSD, true),
 	}
 	if plan.Validate() != nil {
 		return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
 	}
 	if h.dataSpacesEnabled && plan.Personal == nil {
-		return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
-	}
-	if h.idcDataSpacesEnabled && (plan.IDCOriginal == nil || plan.IDCWellspiking == nil || plan.IDCShared == nil || plan.IDCSPKHybrid == nil || plan.IDCSPKSSD == nil) {
 		return k8s.DataMountPlan{}, ErrSubmissionDataMountNotReady
 	}
 	if h.workspaceFSXCompatibleEnabled {
@@ -631,53 +621,3 @@ func (h *Handler) exchangeWorkspaceAccess(c *gin.Context) {
 
 // A binding follows the user through team migration. New namespace-local
 // claims are derived from the same immutable personal binding and generation.
-func (h *Handler) resolveWorkspacePersonalStorage(ctx context.Context, principal auth.Principal) (string, error) {
-	if !h.personalStorageAllowed(principal) {
-		return "", nil
-	}
-	owner, err := personalStorageOwner(principal)
-	if err != nil {
-		return "", err
-	}
-	view, err := h.personalStorage.View(ctx, owner)
-	if err != nil {
-		return "", err
-	}
-	if view.State == personalstorage.StateUnbound && view.BindingID == "" {
-		return "", nil
-	}
-	if view.State != personalstorage.StateReady {
-		return "", fmt.Errorf("personal storage connection is not ready")
-	}
-	reference, err := h.personalStorage.MountReference(ctx, owner)
-	if err != nil {
-		return "", err
-	}
-	if h.kubernetes == nil {
-		return "", fmt.Errorf("personal storage Kubernetes integration unavailable")
-	}
-	if h.repository == nil || h.repository.EnsureIdentity(ctx, principal) != nil {
-		return "", fmt.Errorf("personal storage identity unavailable")
-	}
-	if err := h.ensureTenantNamespaceAndPullSecrets(ctx, principal.TenantID, "tenant-"+sanitizeDNS(principal.TenantID)); err != nil {
-		return "", err
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		claim, ready, err := h.kubernetes.EnsurePersonalStorageMountResources(waitCtx, reference, "tenant-"+sanitizeDNS(principal.TenantID), h.platformNamespace, h.personalStorageCapacity, h.personalStorageCSIImage)
-		if err != nil {
-			return "", err
-		}
-		if ready && claim != "" {
-			return claim, nil
-		}
-		select {
-		case <-waitCtx.Done():
-			return "", waitCtx.Err()
-		case <-ticker.C:
-		}
-	}
-}

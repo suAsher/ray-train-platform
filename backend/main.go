@@ -26,18 +26,17 @@ import (
 	"ray-train-platform-backend/environmentbuild"
 	"ray-train-platform-backend/helpdocs"
 	"ray-train-platform-backend/httpapi"
-	"ray-train-platform-backend/idcsync"
 	"ray-train-platform-backend/k8s"
 	"ray-train-platform-backend/mlflowtracking"
 	"ray-train-platform-backend/modellifecycle"
 	"ray-train-platform-backend/objectstore"
 	"ray-train-platform-backend/observability"
-	"ray-train-platform-backend/personalstorage"
 	"ray-train-platform-backend/rayapi"
 	"ray-train-platform-backend/repositories"
 	"ray-train-platform-backend/runtimecatalog"
 	"ray-train-platform-backend/telemetry"
 	"ray-train-platform-backend/trackingartifacts"
+	"ray-train-platform-backend/webui"
 )
 
 func main() {
@@ -152,22 +151,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialize dataset publication controller: %v", err)
 	}
-	idcSyncManager, err := newIDCSyncManager(repository, kubeClient, cfg)
-	if err != nil {
-		log.Fatalf("initialize IDC sync manager: %v", err)
-	}
-	// Keep the worker-only callback surface absent until the complete IDC
-	// configuration is enabled. A disabled feature must not expose a route that
-	// accepts receipts merely because the platform happens to have a PAT pepper.
-	var idcSyncCallbacks api.IDCDataSyncCallbackStore
-	var idcSyncCallbackKey []byte
-	if idcSyncManager != nil {
-		idcSyncCallbacks = repository
-		idcSyncCallbackKey = []byte(cfg.PATPepper)
-	}
 	dataObjectStore, _ := directoryLister.(objectstore.DataSpaceStore)
 	workspaceSnapshotStore, _ := directoryLister.(objectstore.WorkspaceSnapshotStore)
-	jobOptions := api.Options{BootstrapTenant: cfg.BootstrapAdminTenant, AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), IDCClaim: cfg.IDCExistingClaim, IDCMountPath: cfg.IDCMountPath, KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, Memberships: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, TrainingDedicatedNodes: cfg.TrainingDedicatedNodes, Images: repository, GitCredentials: repository, StorageAssets: repository, Datasets: repository, DatasetPublications: datasetPublicationManager, DatasetInternalPrefix: cfg.DatasetInternalPrefix, DatasetVersioningEnabled: cfg.DatasetVersioningEnabled, RayDataStreamingEnabled: cfg.RayDataStreamingEnabled, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, WorkspaceFSXCompatibleEnabled: cfg.WorkspaceFSXCompatibleEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, IDCDataSpacesEnabled: cfg.IDCDataSpacesEnabled, IDCDataSpacesMountCapacity: cfg.IDCDataSpacesMountCapacity, IDCDataSpaceSources: idcDataSpaceSources(cfg), DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, IDCDataSyncCallbacks: idcSyncCallbacks, IDCDataSyncCallbackKey: idcSyncCallbackKey, IDCDataSyncManager: idcSyncManager, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, RuntimePolicy: runtimecatalog.NewPolicy(cfg.RayTrainManagedEnabled, cfg.RayTrainCanaryEnabled, cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants), TenantScheduling: repository, PreemptionEnabled: cfg.KueuePreemptionEnabled, MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardPublicEnabled: cfg.MLflowDashboardPublicEnabled, MLflowNativePublicEnabled: cfg.MLflowNativePublicEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour}
+	jobOptions := api.Options{BootstrapTenant: cfg.BootstrapAdminTenant, AllowAnonymous: cfg.DemoMode, Logs: logs, Metrics: metrics, Experiments: experiments, ImageAllowlist: cfg.RayImageAllowlist, GitAllowlist: cfg.GitAllowlist, Workspaces: repository, Kubernetes: kubeClient, WorkspaceImage: cfg.WorkspaceImage, RayVersion: cfg.RayVersion, ServiceAccount: cfg.RayJobServiceAccount, ImagePullSecrets: cfg.ImagePullSecrets, PlatformNamespace: runtimeNamespace(), KueueClusterQueue: cfg.KueueClusterQueue, Admin: repository, GPUAllocations: repository, Quota: repository, Memberships: repository, WorkspacePepper: []byte(cfg.PATPepper), TrainingNodeSelector: cfg.TrainingNodeSelector, TrainingDedicatedNodes: cfg.TrainingDedicatedNodes, Images: repository, GitCredentials: repository, StorageAssets: repository, Datasets: repository, DatasetPublications: datasetPublicationManager, DatasetInternalPrefix: cfg.DatasetInternalPrefix, DatasetVersioningEnabled: cfg.DatasetVersioningEnabled, RayDataStreamingEnabled: cfg.RayDataStreamingEnabled, DataSpaces: repository, DataSpacesEnabled: cfg.DataSpacesEnabled, WorkspaceFSXCompatibleEnabled: cfg.WorkspaceFSXCompatibleEnabled, DataSpacesFSXAttributes: cfg.DataSpacesFSXAttributes, DataSpacesMountCapacity: cfg.DataSpacesMountCapacity, DataSpacesPublicRoot: cfg.DataSpacesPublicRoot, DirectoryLister: directoryLister, DirectoryInitializer: directoryInitializer, DataObjectStore: dataObjectStore, WorkspaceSnapshotStore: workspaceSnapshotStore, WorkspaceSnapshots: repository, ArtifactLister: artifactLister, ArtifactReader: artifactReader, LocalCache: api.LocalCachePolicy{Enabled: cfg.LocalCacheEnabled, AllowedSizes: cfg.LocalCacheAllowedSizes, DefaultSize: cfg.LocalCacheSize, MaxSize: cfg.LocalCacheMaxSize, MountPath: cfg.LocalCacheMountPathData1, MountPaths: []string{cfg.LocalCacheMountPathData1, cfg.LocalCacheMountPathData2}}, RuntimePolicy: runtimecatalog.NewPolicy(cfg.RayTrainManagedEnabled, cfg.RayTrainCanaryEnabled, cfg.RayTrainManagedTenants, cfg.RayTrainCanaryTenants), TenantScheduling: repository, PreemptionEnabled: cfg.KueuePreemptionEnabled, MLflowDashboardEnabled: cfg.MLflowDashboardEnabled, MLflowDashboardPublicEnabled: cfg.MLflowDashboardPublicEnabled, MLflowNativePublicEnabled: cfg.MLflowNativePublicEnabled, MLflowDashboardStore: repository, MLflowTrackingURL: cfg.MLflowTrackingURL, MLflowPublicOrigin: cfg.MLflowPublicOrigin, MLflowDashboardPepper: []byte(cfg.PATPepper), MLflowDashboardSessionTTL: time.Duration(cfg.MLflowDashboardSessionHours) * time.Hour}
 	jobOptions.Models = modelStore
 	jobOptions.AssistantIdleNamespace = cfg.AssistantIdleNamespace
 	jobOptions.AssistantControllerCAFile = cfg.AssistantControllerCAFile
@@ -179,10 +165,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("initialize assistant provider routing: %v", err)
 		}
-	}
-	jobOptions.FunctionWarehouses, err = api.DefaultFunctionWarehouseClients()
-	if err != nil {
-		log.Fatalf("initialize function warehouse clients: %v", err)
 	}
 	jobOptions.ModelServing = servingStore
 	jobOptions.ModelReleases = releaseStore
@@ -211,32 +193,7 @@ func main() {
 			jobOptions.TrackingArtifacts = trackingartifacts.New(repositories.NewTrackingArtifactStore(database), tosStore.TrackingArtifacts())
 		}
 	}
-	if cfg.PersonalStorage.Enabled {
-		knownHosts, readErr := os.ReadFile(cfg.PersonalStorage.KnownHostsFile)
-		if readErr != nil {
-			log.Fatalf("read pinned personal storage host keys: %v", readErr)
-		}
-		factory, factoryErr := personalstorage.NewSFTPFactory(personalstorage.Endpoint{Host: cfg.PersonalStorage.Host, Port: cfg.PersonalStorage.Port, KnownHosts: knownHosts})
-		if factoryErr != nil {
-			log.Fatalf("initialize personal storage upstream: %v", factoryErr)
-		}
-		vault, vaultErr := kubeClient.PersonalStorageVault(jobOptions.PlatformNamespace)
-		if vaultErr != nil {
-			log.Fatalf("initialize personal storage vault: %v", vaultErr)
-		}
-		jobOptions.PersonalStorage = personalstorage.NewService(repositories.NewPersonalStorageRepository(database), vault, factory)
-		jobOptions.PersonalStorageTestOwnerIDs = append([]string(nil), cfg.PersonalStorage.TestOwnerIDs...)
-		jobOptions.PersonalStorageCSIImage = cfg.PersonalStorage.CSIImage
-		jobOptions.PersonalStorageMountCapacity = cfg.PersonalStorage.MountCapacity
-		jobOptions.PersonalStorageMaxUploadBytes = cfg.PersonalStorage.MaxUploadBytes
-	}
 	jobHandler := api.NewHandler(repository, jobOptions)
-	storageSyncMetadata, _ := directoryLister.(api.StorageSyncMetadataStore)
-	storageSyncManager, storageSyncHandler, err := newStorageSyncComponents(database, repository, kubeClient, cfg, storageSyncMetadata)
-	if err != nil {
-		log.Fatalf("initialize storage sync: %v", err)
-	}
-	jobHandler.ConfigureStorageSync(storageSyncHandler)
 	jobHandler.ConfigureDatasetPurge(newDatasetPurgeObjects(cfg, directoryLister, kubeClient))
 	rayHandler, err := newRayAPIHandler(repository, jobHandler.SubmissionService(), logs, cfg)
 	if err != nil {
@@ -256,18 +213,6 @@ func main() {
 		go environmentService.Run(ctx)
 	}
 	defer stop()
-	if storageSyncManager != nil {
-		go func() {
-			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-storage-sync", func(leaderContext context.Context) error { storageSyncManager.Run(leaderContext); return nil }); err != nil && ctx.Err() == nil {
-				log.Printf("storage sync controller stopped: %v", err)
-			}
-		}()
-	}
-	if modelSnapshots != nil {
-		if err := jobHandler.InitializeFunctionWarehouseSync(ctx, repositories.NewWarehouseSyncStore(database), []byte(cfg.PATPepper)); err != nil {
-			log.Fatalf("initialize function warehouse sync: %v", err)
-		}
-	}
 	go jobHandler.RunModelServing(ctx)
 	if modelSnapshots != nil {
 		// Database leases fence each snapshot across backend replicas; this loop
@@ -288,13 +233,6 @@ func main() {
 		go func() {
 			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-dataset-publisher", datasetPublicationManager.Run); err != nil && ctx.Err() == nil {
 				log.Printf("dataset publication controller stopped: %v", err)
-			}
-		}()
-	}
-	if idcSyncManager != nil {
-		go func() {
-			if err := kubeClient.RunAsLeader(ctx, platformNamespace, "ray-train-platform-idc-sync", idcSyncManager.Run); err != nil && ctx.Err() == nil {
-				log.Printf("IDC sync controller stopped: %v", err)
 			}
 		}()
 	}
@@ -329,8 +267,13 @@ func main() {
 	router.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	router.GET("/readyz", readinessHandler(database, kubeClient, cfg.AppEnv == "production"))
 	registerAPIRoutesWithLocalAuth(router, jobHandler, patHandler, sourceArtifactHandler, localAuthHandler, repository, validator, patAuthenticator, localSessionAuthenticator, kubeClient, rayHandler, cfg, environmentService)
+	consoleConfig, err := webui.KeycloakConfig(cfg.OIDCIssuerURL, cfg.OIDCClientID, cfg.WebOIDCEnabled)
+	if err != nil {
+		log.Fatalf("initialize web console: %v", err)
+	}
+	webui.Register(router, consoleConfig)
 
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: api.PersonalStorageHTTPHandler(router)}
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: router}
 	shutdownDone := make(chan struct{})
 	go func() {
 		defer close(shutdownDone)
@@ -345,19 +288,6 @@ func main() {
 	}
 	// Finish active HTTP handlers before the deferred telemetry flush.
 	<-shutdownDone
-}
-
-func idcDataSpaceSources(cfg config.Config) map[domain.DataSpaceID]k8s.IDCDataMountSource {
-	sources := make(map[domain.DataSpaceID]k8s.IDCDataMountSource, len(cfg.IDCDataSpaceSources))
-	for name, source := range cfg.IDCDataSpaceSources {
-		space := map[string]domain.DataSpaceID{
-			"original": domain.DataSpaceIDCOriginal, "wellspiking": domain.DataSpaceIDCWellspiking, "shared": domain.DataSpaceIDCShared, "spk-hybrid": domain.DataSpaceIDCSPKHybrid, "spk-ssd": domain.DataSpaceIDCSPKSSD,
-		}[name]
-		if space != "" {
-			sources[space] = k8s.IDCDataMountSource{Server: source.Server, Path: source.Path, MountOptions: source.MountOptions}
-		}
-	}
-	return sources
 }
 
 func newOIDCValidator(cfg config.Config) (*auth.Validator, error) {
@@ -437,8 +367,6 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	jobs.RegisterTrainingEventRoutes(router.Group("/api/v1/internal"))
 	jobs.RegisterModelEvaluationInternalRoutes(router.Group("/api/v1/internal"))
 	jobs.RegisterModelServingInternalRoutes(router.Group("/api/v1/internal"))
-	jobs.RegisterIDCSyncInternalRoutes(router.Group("/api/v1/internal"))
-	jobs.RegisterStorageSyncInternalRoutes(router.Group("/api/v1/internal"))
 	jobs.RegisterAssistantDemandInternalRoutes(router.Group("/api/v1/internal"))
 
 	protected := router.Group("")
@@ -448,7 +376,7 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 			AutoProvision: cfg.OAuth2ProxyAutoProvisionEnabled, DefaultTenantID: cfg.OAuth2ProxyDefaultTenant,
 		}))
 	} else {
-		protected.Use(auth.HybridMiddlewareWithLocal(oidc, pat, localSessions, cfg.OIDCRequired))
+		protected.Use(auth.HybridMiddlewareWithLocal(oidc, pat, localSessions, cfg.OIDCRequired || (cfg.LocalAuthEnabled && !cfg.DemoMode)))
 	}
 	protected.Use(auth.DemoIdentityMiddleware(cfg.DemoMode))
 	protected.Use(auth.IntegrationRouteGuard())
@@ -508,12 +436,9 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 	oidcOnly := interactive
 	jobs.RegisterWorkspaceRoutes(oidcOnly)
 	jobs.RegisterAdminRoutes(oidcOnly)
-	jobs.RegisterIDCSyncManagementRoutes(oidcOnly)
-	jobs.RegisterStorageSyncManagementRoutes(oidcOnly)
 	jobs.RegisterImageManagementRoutes(interactive)
 	jobs.RegisterHelpManagementRoutes(interactive)
 	jobs.RegisterModelManagementRoutes(interactive)
-	jobs.RegisterFunctionWarehouseRoutes(interactive)
 	jobs.RegisterModelEvaluationManagementRoutes(interactive)
 	jobs.RegisterModelServingManagementRoutes(interactive)
 	jobs.RegisterModelReleaseRoutes(interactive)
@@ -523,7 +448,6 @@ func registerAPIRoutesWithLocalAuth(router *gin.Engine, jobs *api.Handler, pats 
 		jobs.RegisterDatasetManagementRoutes(interactive)
 	}
 	jobs.RegisterDataSpaceRoutes(interactive)
-	jobs.RegisterPersonalStorageRoutes(interactive)
 	jobs.RegisterWorkspaceSnapshotRoutes(interactive)
 	jobs.RegisterGitCredentialRoutes(interactive)
 	oidcOnly.GET("/cluster/topology", clusterTopologyHandler(kubeClient))
@@ -583,8 +507,6 @@ func newReconciler(repository *repositories.GormRepository, client *k8s.Client, 
 		ServiceAccount:          cfg.RayJobServiceAccount,
 		ImagePullSecrets:        cfg.ImagePullSecrets,
 		SourceMaterializerImage: cfg.SourceMaterializerImage,
-		IDCExistingClaim:        cfg.IDCExistingClaim,
-		IDCMountPath:            cfg.IDCMountPath,
 		NodeSelector:            cfg.TrainingNodeSelector,
 		DedicatedNodes:          cfg.TrainingDedicatedNodes,
 		LocalCache: k8s.LocalCacheOptions{
@@ -648,30 +570,6 @@ func newDatasetPublicationManager(
 	return manager, nil
 }
 
-func newIDCSyncManager(repository *repositories.GormRepository, client *k8s.Client, cfg config.Config) (*idcsync.Manager, error) {
-	if !cfg.IDCSyncEnabled {
-		return nil, nil
-	}
-	if repository == nil || client == nil {
-		return nil, fmt.Errorf("IDC sync requires PostgreSQL and Kubernetes")
-	}
-	source, ok := cfg.IDCDataSpaceSources["original"]
-	if !ok {
-		return nil, fmt.Errorf("IDC sync original source is unavailable")
-	}
-	namespace := runtimeNamespace()
-	return idcsync.NewManager(repository, client, idcsync.Options{
-		Namespace: namespace, Image: cfg.IDCSyncImage, Bucket: cfg.IDCSyncBucket,
-		InternalPrefix: cfg.DatasetInternalPrefix, TosutilConfigSecret: cfg.IDCSyncTosutilConfigSecret,
-		SourceNFSServer: source.Server, SourceNFSPath: source.Path, SourceMountOptions: source.MountOptions,
-		CallbackURL:        "http://ray-train-backend." + namespace + ".svc.cluster.local:8080",
-		ServiceAccountName: cfg.IDCSyncServiceAccount, WorkClaimName: cfg.IDCSyncWorkClaimName,
-		CallbackKey: []byte(cfg.PATPepper),
-		OnReconcileError: func(err error) {
-			log.Printf("IDC sync reconciliation deferred: %v", err)
-		},
-	})
-}
 
 func datasetPublicationControllerOptions(cfg config.Config) datasetpublisher.ControllerOptions {
 	return datasetpublisher.ControllerOptions{

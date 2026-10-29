@@ -34,7 +34,7 @@ func TestParseDataModeAcceptsStreamingAndListsItOnError(t *testing.T) {
 func TestProjectFileLoadsStreamingDatasetReferenceAndBoundedCachePolicy(t *testing.T) {
 	root := t.TempDir()
 	contents := `name: s1h-streaming
-entrypoint: python tools/westwell_train.py configs/s1h.yaml
+entrypoint: python tools/train.py configs/s1h.yaml
 engine: ray-train
 dataMode: streaming
 datasetRef:
@@ -80,7 +80,7 @@ cachePolicy: bounded
 func TestStreamingProjectBuildsOnlyPublicDatasetReference(t *testing.T) {
 	value := project{
 		Name: "s1h-streaming", Image: "registry.example/streaming@sha256:" + strings.Repeat("a", 64),
-		Entrypoint: "python tools/westwell_train.py configs/s1h.yaml", Engine: "ray-train",
+		Entrypoint: "python tools/train.py configs/s1h.yaml", Engine: "ray-train",
 		DataMode: "streaming", Workers: 2, GPUsPerWorker: 8,
 		DatasetRef:  domain.DatasetReference{Dataset: "labeled-full", Version: "dataset-version-20260830"},
 		CachePolicy: domain.DatasetCachePolicyBounded,

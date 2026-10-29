@@ -1,9 +1,11 @@
 # Additional opt-in debug environment. Never replaces the original training base.
-ARG CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
+ARG CODE_SERVER_IMAGE=codercom/code-server:4.93.1
+ARG ENVIRONMENT_BASE_IMAGE
 FROM ${CODE_SERVER_IMAGE} AS code-server
-FROM harbor.wellspiking.ai/guofeng.su/raytrain-base@sha256:3ec73cf863847a42bcac035309259ad9d08fd74561384cc8476020c62264d6e2
-ARG PIP_INDEX_URL=https://mirrors.ivolces.com/pypi/simple/
-ARG APT_MIRROR=http://repo.wellspiking.ai/repository/ubuntu-jammy
+FROM ${ENVIRONMENT_BASE_IMAGE}
+ARG ENVIRONMENT_BASE_IMAGE
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG APT_MIRROR=http://archive.ubuntu.com/ubuntu
 USER root
 COPY images/environment-workspace/pip.conf /etc/pip.conf
 # Editor server dependencies never enter the training interpreter.
@@ -13,7 +15,7 @@ RUN test -n "${PIP_INDEX_URL}" \
  && /opt/raytrain/editor/bin/python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" jupyterlab==4.2.5 jupyter_server==2.14.2 ipykernel==6.29.5
 COPY --from=code-server /usr/lib/code-server /usr/lib/code-server
 COPY --from=code-server /usr/bin/code-server /usr/bin/code-server
-COPY images/environment-workspace/environment_runtime.py /usr/local/lib/raytrain-environment/environment_runtime.py
+COPY images/environment-workspace/environment_runtime.py images/environment-workspace/write_profile.py /usr/local/lib/raytrain-environment/
 COPY images/environment-workspace/raytrain-environment /usr/local/bin/raytrain-environment
 COPY images/environment-workspace/runtime_smoke.py /usr/local/bin/raytrain-environment-selfcheck
 COPY images/environment-workspace/jupyter_smoke.py /usr/local/lib/raytrain-environment/jupyter_smoke.py
@@ -33,6 +35,8 @@ ENV PATH=/opt/raytrain/environment-wrappers:/opt/raytrain/environment/bin:$PATH 
     JUPYTER_PATH=/usr/local/share/jupyter \
     BASH_ENV=/opt/raytrain/environment-shell.sh
 RUN chmod 0755 /usr/local/bin/raytrain-environment /usr/local/bin/raytrain-environment-selfcheck /opt/raytrain/environment-wrappers/ray /opt/raytrain/environment-wrappers/torchrun /opt/raytrain/environment-wrappers/jupyter \
+ && install -d -m 0755 /etc/raytrain \
+ && ENVIRONMENT_BASE_IMAGE="${ENVIRONMENT_BASE_IMAGE}" /home/ray/anaconda3/bin/python3 /usr/local/lib/raytrain-environment/write_profile.py \
  && raytrain-environment baseline \
  && python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" --constraint /opt/raytrain/environment-constraints.txt ipykernel==6.29.5 \
  && python -m pip check \

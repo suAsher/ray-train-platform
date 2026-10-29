@@ -10,8 +10,8 @@ fullnameOverride: ""
 existingConfigMap: ""
 
 images:
-  provisioner: harbor.wellspiking.ai/guofeng.su/local-path-provisioner@sha256:7d30aa9da00db4d40dbe3d2bb41a0fb6a3a926cbe915908458b0ec470db73115
-  helper: harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4
+  provisioner: docker.io/rancher/local-path-provisioner:v0.0.32
+  helper: docker.io/library/busybox:1.36.1
   pullPolicy: IfNotPresent
 
 storageClass:
@@ -39,16 +39,16 @@ provisioner:
       cpu: 200m
       memory: 256Mi
   preferredNodeSelector:
-    platform.wellspiking.ai/pool: control-plane
+    raytrain.io/pool: control-plane
 
 monitoring:
   enabled: false
   intervalSeconds: 30
   nodeSelector:
     accelerator: nvidia-rtx-4090
-    platform.wellspiking.ai/gpu-pool: production
+    raytrain.io/gpu-pool: production
   nodeExporter:
-    image: harbor.wellspiking.ai/guofeng.su/node-exporter@sha256:8c9bac11973b94b59be88d6e11fee4429aa743c8846cdc75d65b18db33f6a106
+    image: quay.io/prometheus/node-exporter:v1.9.1
     resources:
       requests:
         cpu: 50m
@@ -57,7 +57,7 @@ monitoring:
         cpu: 200m
         memory: 128Mi
   collector:
-    image: harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4
+    image: docker.io/library/busybox:1.36.1
     # Non-root UID with the trusted root-owned cache directory group. The
     # host mounts are exact cache roots and read-only.
     runAsUser: 65534

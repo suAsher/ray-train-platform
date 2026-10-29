@@ -19,7 +19,6 @@ import (
 	"ray-train-platform-backend/assistant"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
-	fw "ray-train-platform-backend/functionwarehouse"
 	"ray-train-platform-backend/httpapi"
 	"ray-train-platform-backend/k8s"
 	me "ray-train-platform-backend/modelevaluation"
@@ -31,7 +30,6 @@ import (
 	"ray-train-platform-backend/observability"
 	"ray-train-platform-backend/repositories"
 	"ray-train-platform-backend/runtimecatalog"
-	ws "ray-train-platform-backend/warehousesync"
 )
 
 type JobRepository interface {
@@ -47,13 +45,6 @@ type globalJobReader interface {
 }
 
 type Handler struct {
-	personalStorage               PersonalStorageService
-	personalStorageTestOwnerIDs   map[string]bool
-	personalStorageCSIImage       string
-	personalStorageCapacity       string
-	personalStorageMaxUpload      int64
-	personalStorageUploadTimeout  time.Duration
-	storageSync                   *StorageSyncHandler
 	assistantControllerCAFile     string
 	assistantIdleNamespace        string
 	assistantDemand               AssistantDemandStore
@@ -63,8 +54,6 @@ type Handler struct {
 	assistantStatusSlots          chan struct{}
 	assistant                     assistant.Engine
 	assistantPreviewSubjects      map[string]bool
-	warehouseSync                 *ws.Service
-	functionWarehouses            map[fw.Environment]FunctionWarehouseClient
 	modelServing                  ms.Store
 	modelServingKubernetes        modelServingKubernetes
 	modelReleases                 modelrelease.Repository
@@ -98,8 +87,6 @@ type Handler struct {
 	serviceAccount                string
 	imagePullSecrets              []string
 	platformNamespace             string
-	idcClaim                      string
-	idcMountPath                  string
 	clusterQueue                  string
 	admin                         AdminStore
 	gpuAllocations                GPUAllocationStore
@@ -125,9 +112,6 @@ type Handler struct {
 	dataSpacesFSXAttrs            string
 	dataSpacesCapacity            string
 	dataSpacesPublicRoot          string
-	idcDataSpacesEnabled          bool
-	idcDataSpacesCapacity         string
-	idcDataSpaceSources           map[domain.DataSpaceID]k8s.IDCDataMountSource
 	directoryLister               objectstore.DirectoryLister
 	directoryInitializer          objectstore.PersonalDataDirectoryInitializer
 	dataObjectStore               objectstore.DataSpaceStore
@@ -135,9 +119,6 @@ type Handler struct {
 	dataSpaceUploads              DataSpaceUploadRepository
 	workspaceSnapshotStore        objectstore.WorkspaceSnapshotStore
 	workspaceSnapshots            WorkspaceSnapshotRepository
-	idcSyncCallbacks              IDCDataSyncCallbackStore
-	idcSyncCallbackKey            []byte
-	idcSyncManager                IDCDataSyncManager
 	artifactLister                objectstore.ArtifactLister
 	artifactReader                objectstore.ArtifactReader
 	gitCredentialTester           GitCredentialTester
@@ -180,11 +161,6 @@ type ExperimentProvider interface {
 }
 
 type Options struct {
-	PersonalStorage               PersonalStorageService
-	PersonalStorageTestOwnerIDs   []string
-	PersonalStorageCSIImage       string
-	PersonalStorageMountCapacity  string
-	PersonalStorageMaxUploadBytes int64
 	AssistantControllerCAFile     string
 	AssistantIdleNamespace        string
 	AssistantDemand               AssistantDemandStore
@@ -192,7 +168,6 @@ type Options struct {
 	AssistantStatusSource         AssistantStatusSource
 	Assistant                     assistant.Engine
 	AssistantPreviewSubjects      []string
-	FunctionWarehouses            map[fw.Environment]FunctionWarehouseClient
 	ModelServing                  ms.Store
 	ModelReleases                 modelrelease.Repository
 	ModelRegistry                 modelregistry.Provider
@@ -220,8 +195,6 @@ type Options struct {
 	ServiceAccount                string
 	ImagePullSecrets              []string
 	PlatformNamespace             string
-	IDCClaim                      string
-	IDCMountPath                  string
 	KueueClusterQueue             string
 	Admin                         AdminStore
 	GPUAllocations                GPUAllocationStore
@@ -247,18 +220,12 @@ type Options struct {
 	// request. It controls the public dataset root during an explicit data
 	// migration and defaults to ray-train/public/.
 	DataSpacesPublicRoot         string
-	IDCDataSpacesEnabled         bool
-	IDCDataSpacesMountCapacity   string
-	IDCDataSpaceSources          map[domain.DataSpaceID]k8s.IDCDataMountSource
 	DirectoryLister              objectstore.DirectoryLister
 	DirectoryInitializer         objectstore.PersonalDataDirectoryInitializer
 	DataObjectStore              objectstore.DataSpaceStore
 	DataSpaceUploads             DataSpaceUploadRepository
 	WorkspaceSnapshotStore       objectstore.WorkspaceSnapshotStore
 	WorkspaceSnapshots           WorkspaceSnapshotRepository
-	IDCDataSyncCallbacks         IDCDataSyncCallbackStore
-	IDCDataSyncCallbackKey       []byte
-	IDCDataSyncManager           IDCDataSyncManager
 	ArtifactLister               objectstore.ArtifactLister
 	ArtifactReader               objectstore.ArtifactReader
 	GitCredentialTester          GitCredentialTester
@@ -280,25 +247,7 @@ type Options struct {
 }
 
 func NewHandler(repository JobRepository, options Options) *Handler {
-	idcSources := make(map[domain.DataSpaceID]k8s.IDCDataMountSource, len(options.IDCDataSpaceSources))
-	for space, source := range options.IDCDataSpaceSources {
-		idcSources[space] = source
-	}
-	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, mlflowTracking: options.MLflowTracking, trackingArtifacts: options.TrackingArtifacts, mlflowIntegrations: options.MLflowIntegrations, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), idcClaim: options.IDCClaim, idcMountPath: options.IDCMountPath, clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, memberships: options.Memberships, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, trainingDedicatedNodes: options.TrainingDedicatedNodes, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, datasets: options.Datasets, datasetPublications: options.DatasetPublications, datasetInternalPrefix: strings.TrimSuffix(strings.TrimSpace(options.DatasetInternalPrefix), "/"), datasetVersioningEnabled: options.DatasetVersioningEnabled, rayDataStreamingEnabled: options.RayDataStreamingEnabled, dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, workspaceFSXCompatibleEnabled: options.WorkspaceFSXCompatibleEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), idcDataSpacesEnabled: options.IDCDataSpacesEnabled, idcDataSpacesCapacity: options.IDCDataSpacesMountCapacity, idcDataSpaceSources: idcSources, directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, dataSpaceUploads: options.DataSpaceUploads, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, idcSyncCallbacks: options.IDCDataSyncCallbacks, idcSyncCallbackKey: append([]byte(nil), options.IDCDataSyncCallbackKey...), idcSyncManager: options.IDCDataSyncManager, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardPublicEnabled: options.MLflowDashboardPublicEnabled, mlflowNativePublicEnabled: options.MLflowNativePublicEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom, tenantScheduling: options.TenantScheduling, preemptionEnabled: options.PreemptionEnabled}
-	handler.personalStorage = options.PersonalStorage
-	handler.personalStorageTestOwnerIDs = make(map[string]bool, len(options.PersonalStorageTestOwnerIDs))
-	for _, ownerID := range options.PersonalStorageTestOwnerIDs {
-		handler.personalStorageTestOwnerIDs[ownerID] = true
-	}
-	handler.personalStorageCSIImage = options.PersonalStorageCSIImage
-	handler.personalStorageCapacity = options.PersonalStorageMountCapacity
-	handler.personalStorageMaxUpload = options.PersonalStorageMaxUploadBytes
-	if handler.personalStorageMaxUpload <= 0 {
-		handler.personalStorageMaxUpload = 64 << 20
-	}
-	if handler.personalStorageCapacity == "" {
-		handler.personalStorageCapacity = "1Ti"
-	}
+	handler := &Handler{repository: repository, logs: options.Logs, metrics: options.Metrics, experiments: options.Experiments, mlflowTracking: options.MLflowTracking, trackingArtifacts: options.TrackingArtifacts, mlflowIntegrations: options.MLflowIntegrations, allowAnonymous: options.AllowAnonymous, imageAllowlist: append([]string(nil), options.ImageAllowlist...), gitAllowlist: append([]string(nil), options.GitAllowlist...), workspaces: options.Workspaces, kubernetes: options.Kubernetes, workspaceImage: options.WorkspaceImage, rayVersion: options.RayVersion, serviceAccount: options.ServiceAccount, imagePullSecrets: append([]string(nil), options.ImagePullSecrets...), platformNamespace: strings.TrimSpace(options.PlatformNamespace), clusterQueue: options.KueueClusterQueue, admin: options.Admin, gpuAllocations: options.GPUAllocations, quota: options.Quota, memberships: options.Memberships, workspacePepper: append([]byte(nil), options.WorkspacePepper...), trainingNodeSelector: options.TrainingNodeSelector, trainingDedicatedNodes: options.TrainingDedicatedNodes, images: options.Images, gitCredentials: options.GitCredentials, storageAssets: options.StorageAssets, datasets: options.Datasets, datasetPublications: options.DatasetPublications, datasetInternalPrefix: strings.TrimSuffix(strings.TrimSpace(options.DatasetInternalPrefix), "/"), datasetVersioningEnabled: options.DatasetVersioningEnabled, rayDataStreamingEnabled: options.RayDataStreamingEnabled, dataSpaces: options.DataSpaces, dataSpacesEnabled: options.DataSpacesEnabled, workspaceFSXCompatibleEnabled: options.WorkspaceFSXCompatibleEnabled, dataSpacesFSXAttrs: options.DataSpacesFSXAttributes, dataSpacesCapacity: options.DataSpacesMountCapacity, dataSpacesPublicRoot: strings.TrimSpace(options.DataSpacesPublicRoot), directoryLister: options.DirectoryLister, directoryInitializer: options.DirectoryInitializer, dataObjectStore: options.DataObjectStore, dataSpaceUploads: options.DataSpaceUploads, workspaceSnapshotStore: options.WorkspaceSnapshotStore, workspaceSnapshots: options.WorkspaceSnapshots, artifactLister: options.ArtifactLister, artifactReader: options.ArtifactReader, gitCredentialTester: options.GitCredentialTester, gitRefResolver: options.GitRefResolver, newID: newJobID, mlflowDashboardEnabled: options.MLflowDashboardEnabled, mlflowDashboardPublicEnabled: options.MLflowDashboardPublicEnabled, mlflowNativePublicEnabled: options.MLflowNativePublicEnabled, mlflowDashboardStore: options.MLflowDashboardStore, mlflowTrackingURL: strings.TrimSpace(options.MLflowTrackingURL), mlflowPublicOrigin: strings.TrimSpace(options.MLflowPublicOrigin), mlflowDashboardPepper: append([]byte(nil), options.MLflowDashboardPepper...), mlflowDashboardTTL: options.MLflowDashboardSessionTTL, mlflowDashboardNow: options.MLflowDashboardNow, mlflowDashboardRandom: options.MLflowDashboardRandom, tenantScheduling: options.TenantScheduling, preemptionEnabled: options.PreemptionEnabled}
 	if handler.tenantScheduling == nil {
 		handler.tenantScheduling, _ = repository.(TenantSchedulingStore)
 	}
@@ -367,7 +316,6 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 		DataSpaces:               handler.dataSpaces,
 		DataSpacesEnabled:        handler.dataSpacesEnabled,
 		DataSpacesPublicRoot:     handler.dataSpacesPublicRoot,
-		IDCDataSpacesEnabled:     handler.idcDataSpacesEnabled,
 		WorkspaceSnapshots:       handler.workspaceSnapshots,
 		Datasets:                 handler.datasets,
 		DatasetVersioningEnabled: handler.datasetVersioningEnabled,
@@ -387,7 +335,7 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 			return handler.kubernetes.EnsureLocalQueue(ctx, namespace, queue, clusterQueue)
 		},
 		EnsureDataSpaces: func(ctx context.Context, principal auth.Principal) error {
-			if !handler.dataSpacesEnabled && !handler.idcDataSpacesEnabled {
+			if !handler.dataSpacesEnabled {
 				return nil
 			}
 			return handler.ensureDataSpacesForPrincipal(ctx, principal)
@@ -409,10 +357,6 @@ func NewHandler(repository JobRepository, options Options) *Handler {
 		handler.modelEvaluationSubmission = handler.submission
 	}
 	handler.models = options.Models
-	handler.functionWarehouses = make(map[fw.Environment]FunctionWarehouseClient, len(options.FunctionWarehouses))
-	for environment, client := range options.FunctionWarehouses {
-		handler.functionWarehouses[environment] = client
-	}
 	handler.modelServing = options.ModelServing
 	if options.Kubernetes != nil {
 		handler.modelServingKubernetes = options.Kubernetes

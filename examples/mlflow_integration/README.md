@@ -12,7 +12,7 @@ Python 3.10+，仅依赖标准库。用于已开放的实验列表、指定 Run 
 
 通过获准的秘密管理方式把 PAT 注入 `RAYTRAIN_PAT` 环境变量。不要把 PAT 放入命令参数、URL、代码或日志。脚本不会打印该环境变量，错误中的相同字符串也会脱敏。
 
-每次明确传入 `--base-url https://raytrain.wellspiking.ai`。地址必须是 HTTPS origin，不能携带账号、路径、查询参数或 fragment。客户端拒绝所有重定向，防止凭据被转发；不要改成 `/mlflow/` 浏览器地址或集群内 Tracking URI。
+每次明确传入 `--base-url https://raytrain.example.com`。地址必须是 HTTPS origin，不能携带账号、路径、查询参数或 fragment。客户端拒绝所有重定向，防止凭据被转发；不要改成 `/mlflow/` 浏览器地址或集群内 Tracking URI。
 
 ## 只读命令
 
@@ -20,10 +20,10 @@ Python 3.10+，仅依赖标准库。用于已开放的实验列表、指定 Run 
 
 ```bash
 python3 examples/mlflow_integration/client.py \
-  --base-url https://raytrain.wellspiking.ai list --limit 100
+  --base-url https://raytrain.example.com list --limit 100
 
 python3 examples/mlflow_integration/client.py \
-  --base-url https://raytrain.wellspiking.ai read \
+  --base-url https://raytrain.example.com read \
   --job-id "$JOB_ID" --run-id "$RUN_ID"
 ```
 
@@ -43,7 +43,7 @@ python3 examples/mlflow_integration/client.py \
 
 ```bash
 python3 examples/mlflow_integration/client.py \
-  --base-url https://raytrain.wellspiking.ai log-batch \
+  --base-url https://raytrain.example.com log-batch \
   --job-id "$JOB_ID" --run-id "$RUN_ID" --payload ./batch.json
 ```
 
@@ -60,7 +60,7 @@ import os
 from examples.mlflow_integration.client import PlatformAPIError, RayTrainMLflowClient
 
 integration = RayTrainMLflowClient(
-    "https://raytrain.wellspiking.ai", os.environ["RAYTRAIN_PAT"]
+    "https://raytrain.example.com", os.environ["RAYTRAIN_PAT"]
 )
 # job_id、run_id 来自调用方明确授权的目标配置。
 experiment = integration.read_run(job_id, run_id)
@@ -80,7 +80,7 @@ python3 -m unittest discover -s examples/mlflow_integration -p 'test_*.py' -v
 
 `integration_artifacts.py` 面向**已存在的平台外部 Run**，不接受训练 Job ID 或上游 MLflow Run ID，不创建训练、不结束 Run，也不管理凭据。完整身份/grant/文件合同见[集成身份与受控产物](../../docs/MLFLOW_INTEGRATION_ARTIFACT_API.md)。是否已上线以发布验收记录为准；这不是 MLflow SDK Artifact API。
 
-通过秘密管理渠道注入获准的 `RAYTRAIN_PAT`（集成令牌也使用此变量），配置 `RAYTRAIN_API=https://raytrain.wellspiking.ai`。上传需 scope 与目标实验 grant 同时允许产物读写；读取需产物读权限。先上传完成，再结束 Run。
+通过秘密管理渠道注入获准的 `RAYTRAIN_PAT`（集成令牌也使用此变量），配置 `RAYTRAIN_API=https://raytrain.example.com`。上传需 scope 与目标实验 grant 同时允许产物读写；读取需产物读权限。先上传完成，再结束 Run。
 
 ```bash
 # 文件只读；第一次必须指定不存在的 receipt 路径。

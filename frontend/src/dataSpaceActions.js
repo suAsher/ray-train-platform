@@ -1,8 +1,6 @@
 import { dataSpaceReadiness, dataSpaceStorageReady } from './dataSpaceReadiness.js'
 
-// Browser enumeration is an optional convenience. IDC NFS roots deliberately
-// remain non-browsable in the Portal but, once their mount is ready, are valid
-// training inputs exactly like a ready TOS data space.
+// Browser enumeration is optional; mounting readiness controls training access.
 export function canUseDataSpaceForTraining(space) {
   return Boolean(space) && dataSpaceReadiness(space).ready
 }

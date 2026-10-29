@@ -44,7 +44,7 @@ func TestHelpArticlesExposeFortyThreeQuestionDocumentsFromPublishedSeed(t *testi
 		}
 	}
 	assertArticle(t, byID, "quickstart", "start", "第一次如何跑通一条训练任务？", []string{"### 第一条任务", "我的 GPU 配额"})
-	assertArticle(t, byID, "cli-onboarding-v2", "start", "CLI 如何安装、登录和升级？", []string{"spk-rayjob login --server 'https://raytrain.wellspiking.ai' --token-stdin", "command -v spk-rayjob"})
+	assertArticle(t, byID, "cli-onboarding-v2", "start", "CLI 如何安装、登录和升级？", []string{"spk-rayjob login --server 'https://raytrain.example.com' --token-stdin", "command -v spk-rayjob"})
 	assertArticle(t, byID, "custom-environment", "data", "缺少依赖，如何准备自己的训练镜像？", []string{"raytrain-base:ray2.58.0-py310-torch2.4.1-cu121-20260906"})
 	assertArticle(t, byID, "submit", "training", "如何提交单卡、单机多卡和多机训练？", []string{"python3 tools/train_managed.py", "--cpu-per-worker 8", "--memory-per-worker 32Gi"})
 	assertArticle(t, byID, "debug", "debug", "如何使用 JupyterLab 和 VS Code？", []string{"JupyterLab", "VS Code"})
@@ -58,7 +58,7 @@ func TestHelpArticlesExposeFortyThreeQuestionDocumentsFromPublishedSeed(t *testi
 	assertArticle(t, byID, "model-serving-code", "data", "如何准备离线推理代码和匹配的运行方案？", []string{"源码 ZIP", "serving_sdk.py", "model_adapter.py", "内网", "smoke_adapter.py", "不证明模型精度"})
 	assertArticle(t, byID, "model-serving-use", "debug", "如何启动、调用、停止和切换模型推理服务？", []string{"1 GPU", "1 小时", "7 天", "models:invoke", "credentials: 'same-origin'", "先停后启", "原始 JSON"})
 	assertArticle(t, byID, "model-serving-errors", "troubleshooting", "推理服务排队、未就绪或调用失败怎么办？", []string{"排队", "413", "429", "SHA-256", "健康", "不代表模型精度达标"})
-	assertArticle(t, byID, "mlflow-api-with-pat", "mlflow", "如何调用 MLflow API 查询实验与 Run？", []string{"MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'", "next_page_token 字段，把它原样放进下一次请求正文的 page_token", "403 查 PAT 是否包含 mlflow:full"})
+	assertArticle(t, byID, "mlflow-api-with-pat", "mlflow", "如何调用 MLflow API 查询实验与 Run？", []string{"MLFLOW_TRACKING_URI='https://raytrain.example.com/api/v1/mlflow-native'", "next_page_token 字段，把它原样放进下一次请求正文的 page_token", "403 查 PAT 是否包含 mlflow:full"})
 	assertArticle(t, byID, "errors", "troubleshooting", "遇到 401、403、Pending 等错误先检查什么？", []string{"401 / INVALID_AUTHENTICATION", "413"})
 }
 

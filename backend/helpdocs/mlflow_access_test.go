@@ -11,7 +11,7 @@ func TestNativeMLflowHelpReflectsActiveAuthenticationMode(t *testing.T) {
 	for _, id := range []string{"mlflow-api-with-pat", "mlflow-external-tracking", "mlflow"} {
 		article := ProjectHelpArticle(domain.HelpDocument{ID: id, Markdown: "seed", UpdatedBy: PlatformSeedActor})
 		public := ProjectMLflowAccess(article.HelpDocument, true, false)
-		for _, marker := range []string{"免令牌", "删除", "https://raytrain.wellspiking.ai/api/v1/mlflow-native"} {
+		for _, marker := range []string{"免令牌", "删除", "https://raytrain.example.com/api/v1/mlflow-native"} {
 			if !strings.Contains(public.Markdown, marker) {
 				t.Errorf("%s public guide missing %q", id, marker)
 			}
@@ -41,7 +41,7 @@ func TestMLflowWebHelpReflectsIndependentAuthenticationModes(t *testing.T) {
 			article := ProjectHelpArticle(domain.HelpDocument{ID: id, UpdatedBy: PlatformSeedActor})
 			private := ProjectMLflowAccess(article.HelpDocument, nativePublic, false)
 			public := ProjectMLflowAccess(article.HelpDocument, nativePublic, true)
-			for _, marker := range []string{"无需登录", "https://raytrain.wellspiking.ai/mlflow/", "#/experiments/", "分享", "原有“打开 MLflow”按钮仍可使用", "读取、创建、修改和删除", "平台任务、个人目录、数据空间和调度接口仍需原有认证"} {
+			for _, marker := range []string{"无需登录", "https://raytrain.example.com/mlflow/", "#/experiments/", "分享", "原有“打开 MLflow”按钮仍可使用", "读取、创建、修改和删除", "平台任务、个人目录、数据空间和调度接口仍需原有认证"} {
 				if !strings.Contains(public.Markdown, marker) {
 					t.Errorf("nativePublic=%v %s missing public web guidance %q", nativePublic, id, marker)
 				}

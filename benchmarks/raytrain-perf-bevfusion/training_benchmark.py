@@ -307,7 +307,7 @@ def main() -> int:
     command = [
         "raytrain-bevfusion-prepare",
         "python3",
-        "tools/westwell_train.py",
+        "tools/train.py",
         args.config,
         "--launcher",
         "pytorch",

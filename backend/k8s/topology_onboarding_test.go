@@ -20,11 +20,11 @@ func TestTopologyOnboardingUsesCurrentNodeIdentity(t *testing.T) {
 		{"unknown stage", `{"uid":"current","stage":"arbitrary"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			node := gpuNode("gpu", map[string]string{"platform.wellspiking.ai/cache-ready": "true"}, "8")
+			node := gpuNode("gpu", map[string]string{"raytrain.io/cache-ready": "true"}, "8")
 			node.UID = "current"
 			node.Spec.Unschedulable = true
 			node.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}
-			node.Annotations = map[string]string{"platform.wellspiking.ai/onboarding-state": tc.state, "platform.wellspiking.ai/onboarding-reason": strings.Repeat("故", 450)}
+			node.Annotations = map[string]string{"raytrain.io/onboarding-state": tc.state, "raytrain.io/onboarding-reason": strings.Repeat("故", 450)}
 			items, err := (&Client{kubernetes: fake.NewSimpleClientset(node)}).ListGPUNodeUsage(context.Background())
 			if err != nil {
 				t.Fatal(err)
@@ -46,9 +46,9 @@ func TestTopologyOnboardingUsesCurrentNodeIdentity(t *testing.T) {
 
 func TestTopologyReadyRequiresBothCurrentStateAndLabel(t *testing.T) {
 	for _, label := range []string{"true", "false", ""} {
-		node := gpuNode("gpu", map[string]string{"platform.wellspiking.ai/cache-ready": label}, "8")
+		node := gpuNode("gpu", map[string]string{"raytrain.io/cache-ready": label}, "8")
 		node.UID = "current"
-		node.Annotations = map[string]string{"platform.wellspiking.ai/onboarding-state": `{"uid":"current","stage":"ready"}`}
+		node.Annotations = map[string]string{"raytrain.io/onboarding-state": `{"uid":"current","stage":"ready"}`}
 		got := withNodeOnboarding(GPUNodeUsage{}, *node)
 		if got.CacheReady == nil || *got.CacheReady != (label == "true") {
 			t.Fatalf("label %q: %+v", label, got)

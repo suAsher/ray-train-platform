@@ -59,7 +59,7 @@ const modelServingCodeGuide = `推理方案固定能够加载某种模型的代�
 
 ### 准备模型适配代码
 
-先从[项目推理示例目录](https://gitlab.wellspiking.ai/guofeng.su/ray-train-platform/-/tree/main/examples/model-serving)取得 serving_sdk.py。可以在本机或构建机准备源码，训练节点不需要访问 Git 或外网。业务模型另外提供 model_adapter.py，实现真实的权重加载、预处理、预测和结果转换；依赖必须已存在于选定镜像中。
+先从[项目推理示例目录](https://github.com/suAsher/ray-train-platform/tree/main/examples/model-serving)取得 serving_sdk.py。可以在本机或构建机准备源码，训练节点不需要访问 Git 或外网。业务模型另外提供 model_adapter.py，实现真实的权重加载、预处理、预测和结果转换；依赖必须已存在于选定镜像中。
 
 下面的 serve.py 调用你自己实现的 load_model 与 predict。它们的输入输出要与方案登记的 JSON 样例一致；平台不会猜测 .pth、.onnx 或 .safetensors 的模型结构：
 
@@ -77,7 +77,7 @@ SDK 使用平台注入的任务专属凭据下载本次固定权重，校验大�
 
 示例目录中的 smoke_adapter.py 只做文件校验与协议回显，不执行真实模型预测。它用于验证通路，不证明模型精度、预处理正确或业务上线条件已经满足。`
 
-const modelServingUseGuide = `在[实验中心 → 推理服务](https://spiking-dev.wellspiking.ai/raytrain/rayTrain/experiments?tab=services)查看服务，或从模型已获批的版本开始创建。所有平台成员可查看共享服务；创建需要模型维护权限，停止需要服务创建者或平台 SuperAdmin 权限。模型批准记录的 TEAM 评估证据仍受原有权限保护。
+const modelServingUseGuide = `在[实验中心 → 推理服务](/experiments?tab=services)查看服务，或从模型已获批的版本开始创建。所有平台成员可查看共享服务；创建需要模型维护权限，停止需要服务创建者或平台 SuperAdmin 权限。模型批准记录的 TEAM 评估证据仍受原有权限保护。
 
 ### 启动一个服务
 
@@ -102,7 +102,7 @@ const modelServingUseGuide = `在[实验中心 → 推理服务](https://spiking
 
 将令牌安全传入环境变量 RAYTRAIN_PAT；不要写进源码或发给其他人。程序使用生产域名的标准 API 地址，不加 Portal 的 /raytrain 前缀：
 
-` + "```bash\ncurl --fail-with-body --silent --show-error \\\n  -X POST 'https://raytrain.wellspiking.ai/api/v1/model-services/REPLACE_SERVICE_ID/invocations' \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  --data-binary @request.json\n```" + `
+` + "```bash\ncurl --fail-with-body --silent --show-error \\\n  -X POST 'https://raytrain.example.com/api/v1/model-services/REPLACE_SERVICE_ID/invocations' \\\n  -H \"Authorization: Bearer ${RAYTRAIN_PAT}\" \\\n  -H 'Content-Type: application/json' \\\n  --data-binary @request.json\n```" + `
 
 request.json 必须使用该方案的真实输入结构。服务 ID 与 MLflow Run ID、平台 Job ID 都不同；不要把 MLflow Tracking URI 当作此推理接口。MLflow SDK 接入见[MLflow API](#mlflow-api-with-pat)。
 

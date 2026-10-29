@@ -1,11 +1,11 @@
-{{- range $workload := list (dict "name" "ray-train-backend" "component" "api" "values" .Values.autoscaling.backend) (dict "name" "ray-train-frontend" "component" "portal" "values" .Values.autoscaling.frontend) }}
+{{- range $workload := list (dict "name" "ray-train-backend" "component" "api" "values" .Values.autoscaling.backend) }}
 {{- $settings := $workload.values }}
 {{- if $settings.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: {{ $workload.name }}
-  namespace: {{ $.Values.namespace }}
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "ray-train-platform.commonLabels" $ | nindent 4 }}
     app.kubernetes.io/component: {{ $workload.component }}

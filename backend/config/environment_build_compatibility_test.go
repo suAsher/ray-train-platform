@@ -7,9 +7,9 @@ import (
 )
 
 func TestEnvironmentBuildCompatibleWorkspaceImagesNormalizeExplicitAllowlist(t *testing.T) {
-	primary := "harbor.wellspiking.ai/public/test@sha256:" + strings.Repeat("a", 64)
-	legacy := "harbor.wellspiking.ai/public/workspace@sha256:" + strings.Repeat("b", 64)
-	older := "harbor.wellspiking.ai/public/workspace@sha256:" + strings.Repeat("c", 64)
+	primary := "registry.example.com/public/test@sha256:" + strings.Repeat("a", 64)
+	legacy := "registry.example.com/public/workspace@sha256:" + strings.Repeat("b", 64)
+	older := "registry.example.com/public/workspace@sha256:" + strings.Repeat("c", 64)
 	for _, test := range []struct {
 		name, raw string
 		want      []string
@@ -33,17 +33,17 @@ func TestEnvironmentBuildCompatibleWorkspaceImagesNormalizeExplicitAllowlist(t *
 }
 
 func TestEnvironmentBuildCompatibleWorkspaceImagesRejectUntrustedEntries(t *testing.T) {
-	valid := "harbor.wellspiking.ai/public/workspace@sha256:" + strings.Repeat("b", 64)
+	valid := "registry.example.com/public/workspace@sha256:" + strings.Repeat("b", 64)
 	for _, raw := range []string{
-		"harbor.wellspiking.ai/public/workspace:latest",
-		"harbor.wellspiking.ai/public/workspace@sha256:short",
-		"harbor.qomolo.com/public/workspace@sha256:" + strings.Repeat("b", 64),
-		"harbor.wellspiking.ai.evil.test/public/workspace@sha256:" + strings.Repeat("b", 64),
+		"registry.example.com/public/workspace:latest",
+		"registry.example.com/public/workspace@sha256:short",
+		"registry-secondary.example.com/public/workspace@sha256:" + strings.Repeat("b", 64),
+		"registry.example.com.evil.test/public/workspace@sha256:" + strings.Repeat("b", 64),
 		"https://" + valid, valid + ",", "," + valid, valid + ",," + valid,
 	} {
 		t.Run(raw, func(t *testing.T) {
 			environmentRegistryConfig(t)
-			t.Setenv("ENVIRONMENT_REGISTRY_HOSTS", "harbor.wellspiking.ai,harbor.qomolo.com")
+			t.Setenv("ENVIRONMENT_REGISTRY_HOSTS", "registry.example.com")
 			t.Setenv("ENVIRONMENT_COMPATIBLE_WORKSPACE_IMAGES", raw)
 			if _, err := loadEnvironmentBuildConfig(); err == nil || !strings.Contains(err.Error(), "ENVIRONMENT_COMPATIBLE_WORKSPACE_IMAGES") {
 				t.Fatalf("invalid compatible image allowlist accepted or misreported: %q (%v)", raw, err)

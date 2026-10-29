@@ -55,7 +55,7 @@ func TestManagedRayJobCarriesImmutableClusterAttemptIdentity(t *testing.T) {
 	job.ClusterAttempt = 3
 	job.RayJobName = job.ID + "-a3"
 	manifest := managedManifest(t, job)
-	const key = "raytrain.wellspiking.ai/cluster-attempt"
+	const key = "raytrain.io/cluster-attempt"
 	if got := manifest.GetLabels()[key]; got != "3" {
 		t.Fatalf("managed attempt label = %q, want 3", got)
 	}
@@ -82,7 +82,7 @@ func TestUnadoptedManagedRayJobIsQuarantinedByCreationFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const fenceKey = "raytrain.wellspiking.ai/creation-fence"
+	const fenceKey = "raytrain.io/creation-fence"
 	if got := manifest.GetLabels()[fenceKey]; got != "7" || manifest.GetAnnotations()[fenceKey] != "7" {
 		t.Fatalf("creation fence was not immutable on the RayJob: labels=%v annotations=%v", manifest.GetLabels(), manifest.GetAnnotations())
 	}

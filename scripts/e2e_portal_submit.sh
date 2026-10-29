@@ -12,7 +12,7 @@ for the governed platform job to finish.
 Options:
   --source-dir <path>       Directory containing the smoke source files.
   --config <path>           Existing spk-rayjob login config.
-  --api-url <url>           Platform origin (default: https://raytrain.wellspiking.ai).
+  --api-url <url>           Platform origin (default: https://training.example.com).
   --dataset-path <path>     Path below the public data space.
   --timeout <seconds>       Completion timeout (default: 900).
 EOF
@@ -21,7 +21,7 @@ EOF
 image=""
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../examples/distributed-demo" && pwd)"
 config="${HOME}/.config/spk-rayjob/config.json"
-api_url="https://raytrain.wellspiking.ai"
+api_url="https://training.example.com"
 dataset_path="bevfusion/fz-3dod-v1/platform-validation/annotations/fz-0429-platform-smoke-128"
 timeout_seconds=900
 

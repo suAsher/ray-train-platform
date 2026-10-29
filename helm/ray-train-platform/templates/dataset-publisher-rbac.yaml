@@ -4,7 +4,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ $name }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: dataset-publisher
@@ -20,7 +20,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ $name }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: dataset-publisher
@@ -29,7 +29,7 @@ subjects:
     # The backend reconciler creates publication Jobs. The publisher workload
     # identity itself receives no Kubernetes API permissions.
     name: ray-train-platform-sa
-    namespace: {{ .Values.namespace }}
+    namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

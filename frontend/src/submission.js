@@ -35,6 +35,7 @@ export function shellArg(value) {
 
 /** Build the copyable spk-rayjob command shown in the final submit preview. */
 export function equivalentSubmitCommand(form) {
+  if ([form.datasetStorage, form.checkpointStorage, form.outputStorage].some(value => value?.assetId)) return '# PVC 资产提交请使用本页面；此 CLI 命令预览暂不支持 PVC 资产参数。'
   const parts = [
     'spk-rayjob submit',
     `--name ${shellArg(form.name || '<任务名>')}`,
@@ -173,6 +174,9 @@ export function buildJobSpec(form, platformLimits = {}) {
     input,
     checkpoint: dataLocation(form.checkpoint, 'Checkpoint 输入'),
     output: outputLocation(form.output),
+    datasetStorage: assetSelection(form.datasetStorage),
+    checkpointStorage: assetSelection(form.checkpointStorage),
+    outputStorage: assetSelection(form.outputStorage),
     queue: '',
     timeoutSeconds: nonNegativeInteger(form.timeoutSeconds || 0, '最长运行时间'),
     retryPolicy: { maxRetries: boundedInteger(form.maxRetries || 0, '自动重试次数', 0, 3) },
@@ -420,4 +424,14 @@ function outputLocation(value) {
     throw new Error('训练结果必须保存到“我的训练结果”')
   }
   return location
+}
+
+function assetSelection(value) {
+  if (!value?.assetId) return undefined
+  const assetId = String(value.assetId).trim()
+  const relativePath = String(value.relativePath || '').trim()
+  if (relativePath && (relativePath.startsWith('/') || relativePath.includes('\\') || relativePath.includes('://') || relativePath.split('/').some((part) => !part || part === '.' || part === '..'))) {
+    throw new Error('存储资产路径不合法')
+  }
+  return relativePath ? { assetId, relativePath } : { assetId }
 }

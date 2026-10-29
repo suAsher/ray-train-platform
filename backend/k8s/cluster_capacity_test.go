@@ -62,11 +62,11 @@ func TestTrainingPoolCapacitySumsMatchingNodes(t *testing.T) {
 
 func TestTrainingPoolCapacitiesSeparatesAcceleratorClasses(t *testing.T) {
 	client := &Client{kubernetes: fake.NewSimpleClientset(
-		trainingNode("gpu-4090", map[string]string{"accelerator": "nvidia-rtx-4090", "platform.wellspiking.ai/gpu-pool": "production"}, "8", "64", "512Gi"),
-		trainingNode("gpu-a100", map[string]string{"accelerator": "nvidia-a100", "platform.wellspiking.ai/gpu-pool": "production"}, "4", "48", "256Gi"),
+		trainingNode("gpu-4090", map[string]string{"accelerator": "nvidia-rtx-4090", "raytrain.io/gpu-pool": "production"}, "8", "64", "512Gi"),
+		trainingNode("gpu-a100", map[string]string{"accelerator": "nvidia-a100", "raytrain.io/gpu-pool": "production"}, "4", "48", "256Gi"),
 	)}
 
-	capacities, err := client.TrainingPoolCapacities(context.Background(), map[string]string{"platform.wellspiking.ai/gpu-pool": "production"})
+	capacities, err := client.TrainingPoolCapacities(context.Background(), map[string]string{"raytrain.io/gpu-pool": "production"})
 	if err != nil {
 		t.Fatal(err)
 	}

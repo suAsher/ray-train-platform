@@ -937,15 +937,11 @@ func TestSubmissionUsesConfiguredTemporaryPublicDataRoot(t *testing.T) {
 
 func TestSubmissionInitializesDataSpacesBeforeResolvingLogicalLocations(t *testing.T) {
 	store := &fakeDataSpaceStore{bindings: []domain.DataMountBinding{
-		{ID: "idc", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCOriginal, ClaimName: "idc-original-a", ReadOnly: true, Status: domain.DataMountBindingReady},
-		{ID: "idc-wellspiking", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCWellspiking, ClaimName: "idc-wellspiking-a", ReadOnly: true, Status: domain.DataMountBindingReady},
-		{ID: "idc-shared", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCShared, ClaimName: "idc-shared-a", ReadOnly: true, Status: domain.DataMountBindingReady},
-		{ID: "idc-spk-hybrid", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCSPKHybrid, ClaimName: "idc-spk-hybrid-a", ReadOnly: true, Status: domain.DataMountBindingReady},
-		{ID: "idc-spk-ssd", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCSPKSSD, ClaimName: "idc-spk-ssd-a", ReadOnly: true, Status: domain.DataMountBindingReady},
-	}}
+  {ID: "personal", TenantID: "tenant-a", UserID: "user-a", Scope: domain.DataMountScopePersonal, SpaceID: domain.DataSpaceWorkspace, ClaimName: "personal-data", Driver: domain.FSXCSIDriver, RootPrefix: "ray-train/tenants/tenant-a/users/user-a/", Status: domain.DataMountBindingReady},
+ }}
 	initialized := 0
 	service := NewSubmissionService(&submissionServiceRepository{}, SubmissionServiceOptions{
-		DataSpaces: store, IDCDataSpacesEnabled: true,
+		DataSpaces: store, DataSpacesEnabled: true,
 		EnsureDataSpaces: func(_ context.Context, principal auth.Principal) error {
 			initialized++
 			if principal.Subject != "user-a" {
@@ -953,37 +949,19 @@ func TestSubmissionInitializesDataSpacesBeforeResolvingLogicalLocations(t *testi
 			}
 			return nil
 		},
-		NewID: func() (string, error) { return "job-idc", nil },
+		NewID: func() (string, error) { return "job-data", nil },
 	})
 	spec := submissionSpec("registry.example/ray@sha256:" + strings.Repeat("d", 64))
-	spec.Input = domain.DataLocation{Space: domain.DataSpaceIDCOriginal}
+	spec.Input = domain.DataLocation{Space: domain.DataSpaceMyFiles}
 	job, err := service.Submit(context.Background(), SubmissionInput{
 		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
 		Spec:      spec, Origin: domain.SubmissionOriginPortal,
 	})
-	if err != nil || initialized != 1 || job.Spec.ResolvedDataMounts.Input == nil || job.Spec.ResolvedDataMounts.Input.ClaimName != "idc-original-a" {
-		t.Fatalf("submission did not initialize and resolve IDC data: job=%#v initialized=%d err=%v", job, initialized, err)
+	if err != nil || initialized != 1 || job.Spec.ResolvedDataMounts.Input == nil || job.Spec.ResolvedDataMounts.Input.ClaimName != "personal-data" {
+		t.Fatalf("submission did not initialize and resolve personal data: job=%#v initialized=%d err=%v", job, initialized, err)
 	}
 }
 
-func TestSubmissionWaitsForEveryEnabledIDCDataRootToBind(t *testing.T) {
-	store := &fakeDataSpaceStore{bindings: []domain.DataMountBinding{
-		{ID: "idc-original", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCOriginal, ClaimName: "idc-original-a", ReadOnly: true, Status: domain.DataMountBindingReady},
-		{ID: "idc-wellspiking", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCWellspiking, ClaimName: "idc-wellspiking-a", ReadOnly: true, Status: domain.DataMountBindingPending},
-		{ID: "idc-shared", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCShared, ClaimName: "idc-shared-a", ReadOnly: true, Status: domain.DataMountBindingReady},
-	}}
-	service := NewSubmissionService(&submissionServiceRepository{}, SubmissionServiceOptions{
-		DataSpaces: store, IDCDataSpacesEnabled: true, NewID: func() (string, error) { return "job-idc-pending", nil },
-	})
-	spec := submissionSpec("registry.example/ray@sha256:" + strings.Repeat("c", 64))
-	_, err := service.Submit(context.Background(), SubmissionInput{
-		Principal: auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal},
-		Spec:      spec, Origin: domain.SubmissionOriginPortal,
-	})
-	if !errors.Is(err, ErrSubmissionDataMountNotReady) {
-		t.Fatalf("submission must wait for every enabled IDC data root: %v", err)
-	}
-}
 
 func TestSubmissionPlacesOutputBelowSelectedPersonalRunsDirectory(t *testing.T) {
 	store := &fakeDataSpaceStore{bindings: []domain.DataMountBinding{

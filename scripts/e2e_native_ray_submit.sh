@@ -4,7 +4,7 @@ set -euo pipefail
 # This image is controlled by the platform and contains the stock Ray 2.35
 # client. The user's workload image is passed as validated platform metadata;
 # never run an arbitrary workload image with the caller's PAT in its env.
-readonly RAY_CLI_IMAGE="harbor.wellspiking.ai/guofeng.su/ray-train-pytorch@sha256:db39733e3e5d301547286dd8f532dd2c78c16c4e0806e3e2096189d0696e5288"
+readonly RAY_CLI_IMAGE="${RAY_CLI_IMAGE:-rayproject/ray:2.35.0-py310-gpu}"
 
 usage() {
   cat <<'EOF'
@@ -16,7 +16,7 @@ then find and follow the corresponding governed platform job.
 Options:
   --source-dir <path>       Working directory uploaded by Ray.
   --config <path>           Existing spk-rayjob login config.
-  --api-url <url>           Platform origin (default: https://raytrain.wellspiking.ai).
+  --api-url <url>           Platform origin (default: https://training.example.com).
   --dataset-path <path>     Path below the public data space.
   --timeout <seconds>       Completion timeout (default: 900).
 EOF
@@ -25,7 +25,7 @@ EOF
 image=""
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../examples/distributed-demo" && pwd)"
 config="${HOME}/.config/spk-rayjob/config.json"
-api_url="https://raytrain.wellspiking.ai"
+api_url="https://training.example.com"
 dataset_path="bevfusion/fz-3dod-v1/platform-validation/annotations/fz-0429-platform-smoke-128"
 timeout_seconds=900
 

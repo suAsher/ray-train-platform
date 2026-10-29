@@ -221,7 +221,7 @@ def _read_payload(filename: str) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-url", required=True, help="HTTPS API origin, e.g. https://raytrain.wellspiking.ai")
+    parser.add_argument("--base-url", required=True, help="HTTPS API origin, e.g. https://raytrain.example.com")
     actions = parser.add_subparsers(dest="action", required=True)
     listing = actions.add_parser("list", help="read the recent run window (not a full inventory)")
     listing.add_argument("--limit", type=int, default=100)

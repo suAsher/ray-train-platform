@@ -6,7 +6,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
   name: {{ include "ray-train-platform.fullname" . }}-dataset-workers
-  namespace: {{ default .Values.namespace (get $monitoring "namespace") }}
+  namespace: {{ default .Release.Namespace (get $monitoring "namespace") }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: dataset-observability

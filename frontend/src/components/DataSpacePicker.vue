@@ -50,7 +50,7 @@
         </p>
       </div>
       <p v-if="output" class="mt-3 text-[11px] leading-5 text-slate-500">平台会在这个目录下自动创建一个与任务绑定的独立子目录，不会覆盖已有结果。</p>
-      <p v-else-if="!selectedSpace.browseEnabled" class="mt-3 text-[11px] text-slate-500">IDC 数据以登记的只读根目录挂入训练容器，不提供网页目录枚举。</p>
+      <p v-else-if="!selectedSpace.browseEnabled" class="mt-3 text-[11px] text-slate-500">此数据空间未启用网页目录浏览，请根据管理员提供的目录说明选择输入。</p>
       <p v-else class="mt-3 text-[11px] text-slate-500">通过目录浏览器选择；无需填写 TOS、桶名、PVC 或路径。</p>
     </div>
     <el-alert v-if="model.spaceId && !isReady(selectedSpace)" class="mt-4" type="warning" :closable="false">

@@ -33,7 +33,6 @@ func TestModelColumnsExistInMigrations(t *testing.T) {
 		&DatasetRecord{}, &DatasetVersionRecord{}, &DatasetPartitionRecord{},
 		&DatasetPublicationPartitionAttemptRecord{},
 		&DatasetPublicationRunRecord{}, &DatasetVersionShardRecord{}, &DatasetCacheObservationRecord{},
-		&IDCDataSyncConnectorRecord{}, &IDCDataSyncRunRecord{}, &IDCDataSyncInventoryEntryRecord{}, &IDCDataSyncObjectRefRecord{},
 	}
 
 	namer := schema.NamingStrategy{}

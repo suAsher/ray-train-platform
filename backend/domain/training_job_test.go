@@ -179,7 +179,7 @@ func TestJobSpecValidateAcceptsPinnedTrainingJob(t *testing.T) {
 func TestJobSpecValidateAcceptsCataloguedTaggedTrainingImage(t *testing.T) {
 	spec := JobSpec{
 		Name:       "bevfusion-tagged-run",
-		Image:      "harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion:stable-cuda121",
+		Image:      "registry.example.com/raytrain/ray-train-bevfusion:stable-cuda121",
 		Source:     CodeSource{Type: "git", URL: "https://git.example.com/team/train.git", Commit: "0123456789abcdef"},
 		Entrypoint: Entrypoint{Command: []string{"python", "train.py"}},
 		Resources:  Resources{WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"},
@@ -193,7 +193,7 @@ func TestJobSpecValidateAcceptsCataloguedTaggedTrainingImage(t *testing.T) {
 func TestJobSpecValidateRejectsImageWithoutTagOrDigest(t *testing.T) {
 	spec := JobSpec{
 		Name:       "bevfusion-untagged-run",
-		Image:      "harbor.wellspiking.ai/guofeng.su/ray-train-bevfusion",
+		Image:      "registry.example.com/raytrain/ray-train-bevfusion",
 		Source:     CodeSource{Type: "git", URL: "https://git.example.com/team/train.git", Commit: "0123456789abcdef"},
 		Entrypoint: Entrypoint{Command: []string{"python", "train.py"}},
 		Resources:  Resources{WorkerReplicas: 1, GPUsPerWorker: 1, CPUPerWorker: 8, MemoryPerWorker: "32Gi"},

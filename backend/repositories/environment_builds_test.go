@@ -62,7 +62,7 @@ type environmentRunnerFake struct {
 }
 
 func (*environmentRunnerFake) InspectWorkspace(context.Context, eb.Workspace) (eb.WorkspaceSnapshot, error) {
-	return eb.WorkspaceSnapshot{UID: "workspace-uid", Image: "harbor.wellspiking.ai/public/debug@sha256:" + strings.Repeat("1", 64)}, nil
+	return eb.WorkspaceSnapshot{UID: "workspace-uid", Image: "registry.example.com/public/debug@sha256:" + strings.Repeat("1", 64)}, nil
 }
 func (r *environmentRunnerFake) Step(_ context.Context, b eb.Build, c *eb.Credentials) (eb.StepResult, error) {
 	r.phases = append(r.phases, b.Status)
@@ -93,7 +93,7 @@ func environmentTestService(t *testing.T) (*GormRepository, *eb.Service, *enviro
 	}
 	runner := &environmentRunnerFake{}
 	vault := &environmentVaultFake{values: map[string][]byte{}}
-	service, err := eb.NewService(repo, runner, &environmentRegistryFake{}, vault, eb.Config{Enabled: true, BaseImage: "harbor.wellspiking.ai/public/base@sha256:" + strings.Repeat("0", 64), WorkspaceImage: "harbor.wellspiking.ai/public/debug@sha256:" + strings.Repeat("1", 64), EncryptionKey: []byte(strings.Repeat("k", 32)), GlobalConcurrency: 1, UserConcurrency: 1})
+	service, err := eb.NewService(repo, runner, &environmentRegistryFake{}, vault, eb.Config{Enabled: true, BaseImage: "registry.example.com/public/base@sha256:" + strings.Repeat("0", 64), WorkspaceImage: "registry.example.com/public/debug@sha256:" + strings.Repeat("1", 64), EncryptionKey: []byte(strings.Repeat("k", 32)), GlobalConcurrency: 1, UserConcurrency: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func (s *environmentCreateFailureStore) EnvironmentBuild(ctx context.Context, o 
 func TestEnvironmentBuildCreateRecoversBoundImmutableCredentialAfterDBFailure(t *testing.T) {
 	repo, _, runner, vault := environmentTestService(t)
 	store := &environmentCreateFailureStore{Store: repo, fail: true, unknownAfterError: true}
-	s, err := eb.NewService(store, runner, &environmentRegistryFake{}, vault, eb.Config{Enabled: true, BaseImage: "harbor.wellspiking.ai/public/base@sha256:" + strings.Repeat("0", 64), WorkspaceImage: "harbor.wellspiking.ai/public/debug@sha256:" + strings.Repeat("1", 64), EncryptionKey: []byte(strings.Repeat("k", 32))})
+	s, err := eb.NewService(store, runner, &environmentRegistryFake{}, vault, eb.Config{Enabled: true, BaseImage: "registry.example.com/public/base@sha256:" + strings.Repeat("0", 64), WorkspaceImage: "registry.example.com/public/debug@sha256:" + strings.Repeat("1", 64), EncryptionKey: []byte(strings.Repeat("k", 32))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestEnvironmentBuildCreateFailureCleanupDistinguishesCommittedOperation(t *
 		t.Run(name, func(t *testing.T) {
 			repo, _, runner, vault := environmentTestService(t)
 			store := &environmentCreateFailureStore{Store: repo, fail: true, commitBeforeError: committed}
-			service, err := eb.NewService(store, runner, &environmentRegistryFake{}, vault, eb.Config{Enabled: true, BaseImage: "harbor.wellspiking.ai/public/base@sha256:" + strings.Repeat("0", 64), WorkspaceImage: "harbor.wellspiking.ai/public/debug@sha256:" + strings.Repeat("1", 64), EncryptionKey: []byte(strings.Repeat("k", 32))})
+			service, err := eb.NewService(store, runner, &environmentRegistryFake{}, vault, eb.Config{Enabled: true, BaseImage: "registry.example.com/public/base@sha256:" + strings.Repeat("0", 64), WorkspaceImage: "registry.example.com/public/debug@sha256:" + strings.Repeat("1", 64), EncryptionKey: []byte(strings.Repeat("k", 32))})
 			if err != nil {
 				t.Fatal(err)
 			}

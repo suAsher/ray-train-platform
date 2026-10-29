@@ -57,42 +57,6 @@ OIDC issuer. Local-only development does not. */}}
 {{- end }}
 {{- $mlflow := default (dict) .Values.backend.mlflow }}
 {{- $dataSpaces := default (dict) .Values.dataSpaces }}
-{{- $personalStorage := default (dict) .Values.personalStorage }}
-{{- $objectSetQuota := default (dict) $personalStorage.objectSetQuota }}
-{{- $personalCSI := default (dict) $personalStorage.csi }}
-{{- $personalCSIImage := default (dict) $personalCSI.image }}
-{{- if and (hasKey $personalStorage "enabled") (not (kindIs "bool" $personalStorage.enabled)) }}{{- fail "personalStorage.enabled must be boolean" }}{{- end }}
-{{- if and (hasKey $personalStorage "personalRootIsolationVerified") (not (kindIs "bool" $personalStorage.personalRootIsolationVerified)) }}{{- fail "personalStorage.personalRootIsolationVerified must be boolean" }}{{- end }}
-{{- if and (hasKey $personalStorage "allUsersEnabled") (not (kindIs "bool" $personalStorage.allUsersEnabled)) }}{{- fail "personalStorage.allUsersEnabled must be boolean" }}{{- end }}
-{{- $personalAllUsersEnabled := default false $personalStorage.allUsersEnabled }}
-{{- $personalTestOwnerIDs := list }}
-{{- if hasKey $personalStorage "testOwnerIDs" }}{{- $personalTestOwnerIDs = $personalStorage.testOwnerIDs }}{{- end }}
-{{- if not (kindIs "slice" $personalTestOwnerIDs) }}{{- fail "personalStorage.testOwnerIDs must be a list of stable user IDs" }}{{- end }}
-{{- range $ownerID := $personalTestOwnerIDs }}
-{{- if not (kindIs "string" $ownerID) }}{{- fail "personalStorage.testOwnerIDs must contain only stable user ID strings" }}{{- end }}
-{{- if not (regexMatch `^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$` $ownerID) }}{{- fail "personalStorage.testOwnerIDs contains an invalid stable user ID" }}{{- end }}
-{{- end }}
-{{- if ne (len (uniq $personalTestOwnerIDs)) (len $personalTestOwnerIDs) }}{{- fail "personalStorage.testOwnerIDs must not contain duplicates" }}{{- end }}
-{{- if and $personalAllUsersEnabled (gt (len $personalTestOwnerIDs) 0) }}{{- fail "personalStorage.allUsersEnabled and nonempty testOwnerIDs are mutually exclusive" }}{{- end }}
-{{- $wellspikingPersonalEnabled := default false $personalStorage.enabled }}
-{{- if $wellspikingPersonalEnabled }}
-{{- if and (not $personalAllUsersEnabled) (not (default false $personalStorage.personalRootIsolationVerified)) (eq (len $personalTestOwnerIDs) 0) }}{{- fail "personal storage requires explicit all-users rollout, attested upstream isolation, or validated testOwnerIDs" }}{{- end }}
-{{- if not (default false $personalCSI.enabled) }}{{- fail "personalStorage.csi.enabled is required for personal storage" }}{{- end }}
-{{- if not (default "" $personalStorage.host) }}{{- fail "personalStorage.host is required" }}{{- end }}
-{{- if not (default "" $personalStorage.existingKnownHostsSecret) }}{{- fail "personalStorage.existingKnownHostsSecret must pin the upstream host identity" }}{{- end }}
-{{- if not (regexMatch `^sha256:[0-9a-fA-F]{64}$` (default "" $personalCSIImage.digest)) }}{{- fail "personalStorage.csi.image.digest must pin the node driver" }}{{- end }}
-{{- end }}
-{{- $idcDataSpaces := default (dict) .Values.idcDataSpaces }}
-{{- $idcSync := default (dict) .Values.idcSync }}
-{{- $storageSync := default (dict) .Values.storageSync }}
-{{- $storageSyncPlatformNamespace := default .Release.Namespace .Values.namespace }}
-{{- $storageSyncNamespace := default $storageSyncPlatformNamespace $storageSync.namespace }}
-{{- $storageSyncGCNamespaces := uniq (concat (list $storageSyncNamespace) (default (list) $storageSync.gcNamespaces)) }}
-{{- $storageSyncResources := default (dict) $storageSync.resources }}
-{{- $storageSyncRequests := default (dict) $storageSyncResources.requests }}
-{{- $storageSyncLimits := default (dict) $storageSyncResources.limits }}
-{{- $legacyStorage := default (dict) .Values.storage }}
-{{- if (default false $legacyStorage.enabled) }}{{- fail "storage.enabled is deprecated; configure governed idcDataSpaces instead" }}{{- end }}
 {{- if (default false $dataSpaces.enabled) }}
 {{- $dataSpaceAttributes := default (dict) $dataSpaces.fsxVolumeAttributes }}
 {{- if not (kindIs "map" $dataSpaceAttributes) }}{{- fail "dataSpaces.fsxVolumeAttributes must be a YAML map when dataSpaces.enabled is true" }}{{- end }}
@@ -105,31 +69,11 @@ OIDC issuer. Local-only development does not. */}}
 {{- if hasKey $dataSpaceAttributes $forbidden }}{{- fail (printf "dataSpaces.fsxVolumeAttributes must not contain %s; workload mounts use csi-fsx component IRSA" $forbidden) }}{{- end }}
 {{- end }}
 {{- end }}
-{{- if (default false $idcDataSpaces.enabled) }}
-{{- if not (default "" $idcDataSpaces.mountCapacity) }}{{- fail "idcDataSpaces.mountCapacity is required when idcDataSpaces.enabled is true" }}{{- end }}
-{{- $idcSources := default (dict) $idcDataSpaces.sources }}
-{{- if not (kindIs "map" $idcSources) }}{{- fail "idcDataSpaces.sources must be a YAML map when idcDataSpaces.enabled is true" }}{{- end }}
-{{- range $name := list "original" "wellspiking" "shared" "spk-hybrid" "spk-ssd" }}
-{{- $source := get $idcSources $name }}
-{{- if not (kindIs "map" $source) }}{{- fail (printf "idcDataSpaces.sources.%s must be a YAML map when idcDataSpaces.enabled is true" $name) }}{{- end }}
-{{- $server := default "" (get $source "server") }}
-{{- $path := default "" (get $source "path") }}
-{{- if not $server }}{{- fail (printf "idcDataSpaces.sources.%s.server is required when idcDataSpaces.enabled is true" $name) }}{{- end }}
-{{- if or (not $path) (eq $path "/") (not (hasPrefix "/" $path)) }}{{- fail (printf "idcDataSpaces.sources.%s.path must be a non-root absolute export path" $name) }}{{- end }}
-{{- end }}
-{{- if (default false $idcSync.enabled) }}
-{{- $syncDigest := default "" (get (default (dict) $idcSync.image) "digest") }}
-{{- if not (regexMatch `^sha256:[0-9a-fA-F]{64}$` $syncDigest) }}{{- fail "idcSync.image.digest must use sha256:<64 hex> when enabled" }}{{- end }}
-{{- if not (default "" $idcSync.bucket) }}{{- fail "idcSync.bucket is required when enabled" }}{{- end }}
-{{- if not (default "" $idcSync.tosutilConfigSecret) }}{{- fail "idcSync.tosutilConfigSecret is required when enabled" }}{{- end }}
-{{- if not (default "" $idcSync.serviceAccountName) }}{{- fail "idcSync.serviceAccountName is required when enabled" }}{{- end }}
-{{- end }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ray-train-backend
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: api
@@ -249,28 +193,6 @@ spec:
               value: {{ .Values.backend.appEnv | quote }}
             - name: HTTP_ADDR
               value: ":8080"
-            - name: PERSONAL_STORAGE_ENABLED
-              value: {{ $wellspikingPersonalEnabled | quote }}
-            {{- if $wellspikingPersonalEnabled }}
-            - name: PERSONAL_STORAGE_PERSONAL_ROOT_ISOLATION_VERIFIED
-              value: {{ default false $personalStorage.personalRootIsolationVerified | quote }}
-            - name: PERSONAL_STORAGE_TEST_OWNER_IDS
-              value: {{ join "," $personalTestOwnerIDs | quote }}
-            - name: PERSONAL_STORAGE_ALL_USERS_ENABLED
-              value: {{ $personalAllUsersEnabled | quote }}
-            - name: PERSONAL_STORAGE_HOST
-              value: {{ $personalStorage.host | quote }}
-            - name: PERSONAL_STORAGE_PORT
-              value: {{ default 22 $personalStorage.port | int64 | quote }}
-            - name: PERSONAL_STORAGE_KNOWN_HOSTS_FILE
-              value: /etc/wellspiking-personal/known_hosts
-            - name: PERSONAL_STORAGE_CSI_IMAGE
-              value: {{ printf "%s/%s@%s" .Values.global.imageRegistry $personalCSIImage.repository $personalCSIImage.digest | quote }}
-            - name: PERSONAL_STORAGE_MOUNT_CAPACITY
-              value: {{ default "1Ti" $personalStorage.mountCapacity | quote }}
-            - name: PERSONAL_STORAGE_MAX_UPLOAD_BYTES
-              value: {{ default 67108864 $personalStorage.maxUploadBytes | int64 | quote }}
-            {{- end }}
             - name: PLATFORM_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -281,7 +203,7 @@ spec:
                   name: {{ required "backend.database.existingSecret is required" .Values.backend.database.existingSecret }}
                   key: {{ .Values.backend.database.secretKey }}
             - name: OIDC_ISSUER_URL
-              value: {{ required "backend.oidc.issuerURL is required" .Values.backend.oidc.issuerURL | quote }}
+              value: {{ .Values.backend.oidc.issuerURL | quote }}
             - name: OIDC_CLIENT_ID
               value: {{ required "backend.oidc.clientID is required" .Values.backend.oidc.clientID | quote }}
             - name: OIDC_AUDIENCE
@@ -290,6 +212,8 @@ spec:
               value: {{ .Values.backend.oidc.groupPrefix | quote }}
             - name: OIDC_REQUIRED
               value: {{ .Values.backend.oidcRequired | quote }}
+            - name: WEB_OIDC_ENABLED
+              value: {{ .Values.backend.webOIDCEnabled | quote }}
             - name: OAUTH2_PROXY_AUTH_ENABLED
               value: {{ default false .Values.backend.oauth2ProxyAuthEnabled | quote }}
             - name: DEMO_MODE
@@ -338,95 +262,6 @@ spec:
               value: {{ toJson (default (dict) $dataSpaces.fsxVolumeAttributes) | quote }}
             - name: DATA_SPACES_PUBLIC_ROOT
               value: {{ default "ray-train/public" $dataSpaces.publicRoot | quote }}
-            # Native TOS hard quota for each platform user's fixed ObjectSet.
-            # It is independent of dataSpaces.enabled (FSX mounts), so admins
-            # can prepare and govern personal storage before GPU rollout.
-            - name: TOS_OBJECT_SET_QUOTAS_ENABLED
-              value: {{ default false $objectSetQuota.enabled | quote }}
-            - name: PERSONAL_STORAGE_DEFAULT_QUOTA
-              value: {{ default "100Gi" $objectSetQuota.defaultQuota | quote }}
-            - name: PERSONAL_STORAGE_MAX_QUOTA
-              value: {{ default "10Ti" $objectSetQuota.maxQuota | quote }}
-            # IDC NFS exports are configured by the platform operator. The
-            # API creates only tenant-local read-only adapters; users never
-            # submit an arbitrary server/path and cannot browse the export
-            # through the web object browser.
-            - name: IDC_DATA_SPACES_ENABLED
-              value: {{ default false $idcDataSpaces.enabled | quote }}
-            - name: IDC_DATA_SPACES_MOUNT_CAPACITY
-              value: {{ default "" $idcDataSpaces.mountCapacity | quote }}
-            - name: IDC_DATA_SPACES_SOURCES_JSON
-              value: {{ toJson (default (dict) $idcDataSpaces.sources) | quote }}
-            - name: IDC_SYNC_ENABLED
-              value: {{ default false $idcSync.enabled | quote }}
-            - name: IDC_SYNC_IMAGE
-              {{- if (default false $idcSync.enabled) }}
-              value: {{ include "ray-train-platform.image" (list . (default (dict) $idcSync.image)) | quote }}
-              {{- else }}
-              value: ""
-              {{- end }}
-            - name: IDC_SYNC_BUCKET
-              value: {{ default "" $idcSync.bucket | quote }}
-            - name: IDC_SYNC_TOSUTIL_CONFIG_SECRET
-              value: {{ default "" $idcSync.tosutilConfigSecret | quote }}
-            - name: IDC_SYNC_SERVICE_ACCOUNT
-              value: {{ default "" $idcSync.serviceAccountName | quote }}
-            - name: IDC_SYNC_WORK_CLAIM_NAME
-              value: {{ default "" $idcSync.workClaimName | quote }}
-            - name: STORAGE_SYNC_ENABLED
-              value: {{ default false $storageSync.enabled | quote }}
-            - name: STORAGE_SYNC_NAMESPACE
-              value: {{ $storageSyncNamespace | quote }}
-            - name: STORAGE_SYNC_IMAGE
-              {{- if (default false $storageSync.enabled) }}
-              value: {{ include "ray-train-platform.image" (list . (default (dict) $storageSync.image)) | quote }}
-              {{- else }}
-              value: ""
-              {{- end }}
-            - name: STORAGE_SYNC_BUCKET
-              value: {{ default "" $storageSync.bucket | quote }}
-            - name: STORAGE_SYNC_REGION
-              value: {{ default "" $storageSync.region | quote }}
-            - name: STORAGE_SYNC_ENDPOINT
-              value: {{ default "" $storageSync.endpoint | quote }}
-            - name: STORAGE_SYNC_CREDENTIAL_MODE
-              value: {{ default "static-secret" $storageSync.credentialMode | quote }}
-            - name: STORAGE_SYNC_CREDENTIAL_SECRET
-              value: {{ default "" $storageSync.credentialSecret | quote }}
-            - name: STORAGE_SYNC_SERVICE_ACCOUNT
-              value: {{ default "" $storageSync.serviceAccountName | quote }}
-            - name: STORAGE_SYNC_WORK_CLAIM_NAME
-              value: {{ default "" $storageSync.workClaimName | quote }}
-            - name: STORAGE_SYNC_CALLBACK_BASE_URL
-              value: {{ default (printf "http://ray-train-backend.%s.svc.cluster.local:8080" $storageSyncPlatformNamespace) $storageSync.callbackBaseURL | quote }}
-            - name: STORAGE_SYNC_NODE_SELECTOR_JSON
-              value: {{ toJson (default (dict) $storageSync.nodeSelector) | quote }}
-            - name: STORAGE_SYNC_CPU_REQUEST
-              value: {{ default "500m" $storageSyncRequests.cpu | quote }}
-            - name: STORAGE_SYNC_CPU_LIMIT
-              value: {{ default "2" $storageSyncLimits.cpu | quote }}
-            - name: STORAGE_SYNC_MEMORY_REQUEST
-              value: {{ default "512Mi" $storageSyncRequests.memory | quote }}
-            - name: STORAGE_SYNC_MEMORY_LIMIT
-              value: {{ default "2Gi" $storageSyncLimits.memory | quote }}
-            - name: STORAGE_SYNC_EPHEMERAL_STORAGE_REQUEST
-              value: {{ default "256Mi" (get $storageSyncRequests "ephemeral-storage") | quote }}
-            - name: STORAGE_SYNC_EPHEMERAL_STORAGE_LIMIT
-              value: {{ default "1Gi" (get $storageSyncLimits "ephemeral-storage") | quote }}
-            - name: STORAGE_SYNC_MAX_ACTIVE_RUNS
-              value: {{ default 1 $storageSync.maxActiveRuns | int64 | quote }}
-            - name: STORAGE_SYNC_MAX_FILE_CONCURRENCY
-              value: {{ default 4 $storageSync.maxFileConcurrency | int64 | quote }}
-            - name: STORAGE_SYNC_MAX_PART_CONCURRENCY
-              value: {{ default 2 $storageSync.maxPartConcurrency | int64 | quote }}
-            - name: STORAGE_SYNC_MAX_BANDWIDTH_BYTES_PER_SECOND
-              value: {{ default 104857600 $storageSync.maxBandwidthBytesPerSecond | int64 | quote }}
-            - name: STORAGE_SYNC_GC_NAMESPACES_JSON
-              value: {{ toJson $storageSyncGCNamespaces | quote }}
-            - name: STORAGE_SYNC_GC_SUCCEEDED_TTL_SECONDS
-              value: {{ default 3600 $storageSync.gcSucceededTTLSeconds | int64 | quote }}
-            - name: STORAGE_SYNC_GC_FAILED_TTL_SECONDS
-              value: {{ default 86400 $storageSync.gcFailedTTLSeconds | int64 | quote }}
             - name: KUEUE_AUTO_QUOTA
               value: {{ .Values.kueue.autoQuota | quote }}
             - name: KUEUE_TOPOLOGY_ENABLED
@@ -520,8 +355,10 @@ spec:
             {{- if $environmentBuilds.enabled }}
             - name: ENVIRONMENT_BUILDS_ENABLED
               value: "true"
+            - name: ENVIRONMENT_NODE_SELECTOR_JSON
+              value: {{ toJson (default (dict) $environmentBuilds.nodeSelector) | quote }}
             - name: ENVIRONMENT_REGISTRY_HOSTS
-              value: {{ join "," ($environmentBuilds.registryHosts | default (list "harbor.wellspiking.ai")) | quote }}
+              value: {{ join "," ($environmentBuilds.registryHosts | default (list)) | quote }}
             - name: ENVIRONMENT_BASE_IMAGE
               value: {{ required "environmentBuilds.baseImage is required" $environmentBuilds.baseImage | quote }}
             - name: ENVIRONMENT_WORKSPACE_IMAGE
@@ -537,7 +374,7 @@ spec:
             - name: ENVIRONMENT_WHEEL_INDEX_URL
               value: {{ required "environmentBuilds.wheelIndexURL is required" $environmentBuilds.wheelIndexURL | quote }}
             - name: ENVIRONMENT_STORAGE_CLASS
-              value: {{ $environmentBuilds.storageClass | default "ebs-ssd" | quote }}
+              value: {{ $environmentBuilds.storageClass | default "" | quote }}
             - name: ENVIRONMENT_AUTH_KEY
               valueFrom:
                 secretKeyRef:
@@ -590,11 +427,7 @@ spec:
             - name: TMPDIR
               value: "/var/lib/ray-platform/code-snapshots"
           volumeMounts:
-            {{- if $wellspikingPersonalEnabled }}
-            - name: wellspiking-personal-hostkeys
-              mountPath: /etc/wellspiking-personal
-              readOnly: true
-            {{- end }}
+
             {{- if $telemetryEnabled }}
             - name: platform-telemetry
               mountPath: /etc/platform-telemetry
@@ -634,15 +467,7 @@ spec:
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
       volumes:
-        {{- if $wellspikingPersonalEnabled }}
-        - name: wellspiking-personal-hostkeys
-          secret:
-            secretName: {{ $personalStorage.existingKnownHostsSecret | quote }}
-            defaultMode: 0444
-            items:
-              - key: {{ default "known_hosts" $personalStorage.knownHostsKey | quote }}
-                path: known_hosts
-        {{- end }}
+
         {{- if $telemetryEnabled }}
         - name: platform-telemetry
           secret:
@@ -683,7 +508,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ray-train-backend
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: api

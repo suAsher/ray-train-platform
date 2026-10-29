@@ -12,7 +12,8 @@ const (
 	StorageAssetOutput     = "output"
 
 	StorageProviderTOS = "tos"
-	StorageProviderIDC = "idc"
+	StorageProviderIDC = "idc" // Legacy persisted assets; no automatic IDC mounts.
+	StorageProviderPVC = "pvc"
 
 	StorageMountDataset    = "/mnt/data/dataset"
 	StorageMountCheckpoint = "/mnt/data/checkpoint"
@@ -103,10 +104,10 @@ func ValidateStorageAssetKind(kind string) error {
 
 func ValidateStorageProvider(provider string) error {
 	switch provider {
-	case StorageProviderTOS, StorageProviderIDC:
+	case StorageProviderTOS, StorageProviderIDC, StorageProviderPVC:
 		return nil
 	default:
-		return fmt.Errorf("storage provider must be %q or %q", StorageProviderTOS, StorageProviderIDC)
+		return fmt.Errorf("storage provider must be %q, %q or %q", StorageProviderTOS, StorageProviderIDC, StorageProviderPVC)
 	}
 }
 
@@ -140,12 +141,12 @@ func (asset StorageAsset) Validate() error {
 			return fmt.Errorf("storage asset root prefix: %w", err)
 		}
 	}
-	if asset.Provider == StorageProviderIDC {
+	if asset.Provider == StorageProviderIDC || asset.Provider == StorageProviderPVC {
 		if strings.TrimSpace(asset.RootPrefix) != "" {
-			return fmt.Errorf("IDC storage assets must not expose a storage root prefix")
+			return fmt.Errorf("PVC storage assets must not expose an object storage root prefix")
 		}
 		if asset.BrowseEnabled {
-			return fmt.Errorf("IDC storage assets do not support directory browsing")
+			return fmt.Errorf("PVC storage assets do not support directory browsing")
 		}
 	}
 	return nil

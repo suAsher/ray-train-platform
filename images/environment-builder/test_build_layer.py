@@ -120,11 +120,11 @@ class LayerTest(unittest.TestCase):
 
     def test_builder_default_preserved_and_existing_venv_not_recreated(self):
         dockerfile = (HERE / 'Dockerfile').read_text()
-        self.assertIn('ARG ENVIRONMENT_BASE_IMAGE=harbor.wellspiking.ai/guofeng.su/raytrain-base@sha256:', dockerfile)
+        self.assertIn('ARG ENVIRONMENT_BASE_IMAGE\n', dockerfile)
         self.assertIn('FROM ${ENVIRONMENT_BASE_IMAGE}', dockerfile)
         self.assertIn('test -x /opt/raytrain/environment/bin/python ||', dockerfile)
         self.assertIn('RUN "${ENVIRONMENT_BASE_PYTHON}" -c', dockerfile)
-        self.assertIn("'pytorch':'2.13.0+cu126'", dockerfile)
+        self.assertIn("write_profile.py", dockerfile)
 
     def test_symlink_stays_inside_managed_environment(self):
         build_layer.safe_venv_link('opt/raytrain/environment/lib64', 'lib')

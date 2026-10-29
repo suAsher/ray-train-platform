@@ -32,6 +32,9 @@ type ResolvedDataSpaceRoots struct {
 // Team roots retain their task-time permission: legacy snapshots stay read-only,
 // while new submissions may use the writable tenant-root adapter.
 func (roots ResolvedDataSpaceRoots) Validate() error {
+	if roots.IDCOriginal != nil || roots.IDCWellspiking != nil || roots.IDCShared != nil || roots.IDCSPKHybrid != nil || roots.IDCSPKSSD != nil {
+		return fmt.Errorf("legacy IDC mounts are not supported")
+	}
 	checks := []struct {
 		name     string
 		root     *ResolvedDataRoot

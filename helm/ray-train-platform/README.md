@@ -1,118 +1,21 @@
+# RayTrain Helm chart
 
-### Storage sync executor namespace and retention
+The chart runs one application image containing the Go API and Vue UI, on port 8080.
+It does not install cluster operators or provision GPU nodes.
 
-Administrator storage sync workers can run outside the platform service namespace:
+Start with [the project README](../../README.md) and
+[quickstart values](../../deploy/profiles/quickstart.yaml).
+Supply your own built image references, workspace and source-materializer digests,
+PostgreSQL and authentication Secrets, and install KubeRay and Kueue before training.
 
-```yaml
-storageSync:
-  namespace: ray-train-sync
-  createNamespace: true
-  gcNamespaces: [ray-train-platform]
-  gcSucceededTTLSeconds: 3600
-  gcFailedTTLSeconds: 86400
-  callbackBaseURL: ""
-```
+The release namespace is taken from `helm --namespace`; fixed names mean one
+RayTrain installation per cluster. The control plane creates tenant namespaces
+and requires the ClusterRole documented in `templates/rbac.yaml`.
 
-An empty `namespace` retains the existing platform namespace. An empty callback
-uses `http://ray-train-backend.<platform-namespace>.svc.cluster.local:8080` so it
-also works across namespaces. When using `--reuse-values`, explicitly replace an
-old short callback such as `http://ray-train-backend:8080` with an empty value or
-the full service URL.
+Defaults use local accounts and PATs. OIDC, TOS/FSX data spaces, MLflow,
+observability endpoints, topology-aware admission and preemption are optional.
+No external Portal, company storage mount, or data synchronization service is installed.
 
-The worker ServiceAccount, work PVC and executor Role/RoleBinding use the execution
-namespace; the binding still names the backend ServiceAccount in the platform
-namespace. The worker does not mount a Kubernetes API token. The operator must
-pre-provision the configured TOS credential Secret and image pull Secrets in the
-execution namespace. The chart never reads or copies those credentials. A chart-
-created execution Namespace and work PVC both have `helm.sh/resource-policy: keep`.
-
-`gcNamespaces` is an operator allowlist for historical executors. The current
-execution namespace is always included, duplicates are removed, and additional
-namespaces receive only Job get/list/patch, Pod get/list and Secret get/patch
-permissions through this chart's GC Role. No Job create or delete permission is
-added for historical namespaces. Existing platform ClusterRole permissions are
-unchanged. The backend arms Job TTL only after verifying durable result evidence
-and executor termination; TTL is not added when a Job is created. Platform audit
-records, paused/resumable checkpoints and incremental baselines are retained.
-
-The backend remains a trusted control-plane component with the existing
-cluster-wide Secret permissions. The additional Roles contain only the operations
-needed by this feature; effective permissions also include those existing grants.
-The dedicated namespace separates executor resources and their lifecycle, and
-does not establish a new credential or network isolation boundary from the backend.
-
-Changing the namespace is a storage migration, not a live rescheduling operation:
-stop new storage sync admission, confirm there are no active, paused or reusable
-preview executions, and copy/checksum the old checkpoint PVC to a provisioned new
-PVC before enabling workers in the new namespace. Retain the original PVC and add
-the old namespace to `gcNamespaces` while its executors are reclaimed. A Helm
-rollback alone does not merge checkpoint data written after the namespace cutover.
-
-### Dedicated training nodes
-
-`training.dedicatedNodes` maps tenant IDs to node hostname labels, for example:
-
-```yaml
-training:
-  dedicatedNodes:
-    algorithm: ["172.28.3.32"]
-```
-
-New training submitters, heads, workers, and interactive workspace heads/workers
-use required node affinity. Assigned tenants can only use their listed nodes;
-other tenants exclude every dedicated node. Existing RayJobs and RayClusters are
-not patched. The normal tenant GPU quota and submission APIs are unchanged.
-A missing or full assigned node cannot fall back to the shared pool.
-
-Before admitting a dedicated node to the training pool, set
-`platform.wellspiking.ai/dedicated-tenant=<tenant>:NoSchedule`. Only new workloads
-of that tenant receive the exact toleration. This also prevents pre-cutover
-RayCluster templates from recreating a worker on the newly dedicated node.
-Do not use `NoExecute` or restart existing workloads during cutover.
-
-Deploy the backend assignment and the node-onboarding controller/chart support
-first. The separate onboarding chart needs the inverse whitelist
-`dedicatedNodeTenants: {"172.28.3.32": "algorithm"}`. Then taint the node before
-adding `accelerator=nvidia-rtx-4090` and
-`platform.wellspiking.ai/gpu-pool=production`. Let onboarding verify both local
-disks and NFS and set `platform.wellspiking.ai/cache-ready=true`; do not set that
-receipt manually. Keep the shared Kueue flavor and queues: TAS evaluates the
-required affinity and node taints before assigning a topology domain. Verify the
-installed Kueue version supports these constraints. Removing an assignment is a
-separate capacity migration: retain its taint until affected active templates
-and queued workloads have been reviewed.
-
-#### Shanghai A cutover — 2026-09-15
-
-The `algorithm` assignment to `172.28.3.32` was enabled with source
-`7ad97a85a1b8512864bc15d493a7044a98b7098c`. Backend release revision 240 uses
-`sha256:2a3bac8f5349aee86abfa3a219da0b8c5021beb0eada1d891789344fca58fd17`;
-node-onboarding revision 9 uses
-`sha256:ff15d1b3441c4a627309baa986fda63636997d84cac47016c42dcfc641c3371d`.
-The node carries the production/accelerator labels, the dedicated-tenant label
-and `NoSchedule` taint, and a controller-issued cache-ready receipt after local
-PVC read/write and NFS checks. The team quota remains 8, its queue remains
-`algorithm-gpu`, and Kueue preemption remains disabled. Total physical pool
-capacity is 40 GPUs; other teams cannot consume the dedicated eight.
-
-Validation used the unchanged live Kueue v0.19 shared flavor/queue and placement
-fields emitted by the production renderer. In a temporary namespace, two
-zero-GPU owner probe Pods ran on `172.28.3.32`; two shared probe Pods ran on
-`172.28.1.229`. A conflicting E-zone owner request stayed unadmitted due to hard
-affinity, and a legacy template targeting A stayed unadmitted due to its missing
-taint toleration. The initial probe fixture lacked its non-preempting
-PriorityClass; it was corrected before the successful run. No user workload was
-modified. Full backend tests, Helm render contracts and all 61 server admission
-checks passed. New placement/toleration helpers have 100% statement coverage;
-the new configuration parser has 93.8%.
-
-This is live scheduling isolation acceptance, not an end-to-end GPU training
-acceptance. Existing algorithm jobs consume its eight-GPU quota, and the build
-host's saved `spk-rayjob` authentication was expired. Run a normal authenticated
-GPU submission after quota is available to verify the full training runtime.
-Release overlays, sanitized before/after resource evidence and probe reports
-are retained on the build host under
-`/root/raytrain-dedicated-node-20260915/`.
-The temporary namespace and its Jobs/Workloads/Pods were deleted after the
-successful run. All 13 pre-existing active RayJob/RayCluster/Pod objects retained
-their UIDs, spec hashes, states, node placement and container restart counts.
+Use `scripts/test-delivery-render.sh` to verify the portable rendering contract.
+`deploy/profiles/production.yaml.example` requires an external PostgreSQL service
+and immutable control-plane image digest; it is an overlay, not a complete install.

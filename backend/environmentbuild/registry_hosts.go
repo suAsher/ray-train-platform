@@ -30,6 +30,9 @@ func normalizedRegistryHosts(hosts []string) ([]string, error) {
 // registryHost validates both the fixed trusted origins and this service's
 // configured subset before any user credential can reach a registry.
 func (s *Service) registryHost(host string) (string, error) {
+	if host == "" && len(s.config.RegistryHosts) > 0 {
+		host = s.config.RegistryHosts[0]
+	}
 	resolved, err := registryauth.NormalizeHost(host)
 	if err != nil {
 		return "", ErrInvalid
@@ -48,13 +51,7 @@ func (s *Service) registryHost(host string) (string, error) {
 func (s *Service) registryCapabilities() []RegistryCapability {
 	items := make([]RegistryCapability, 0, len(s.config.RegistryHosts))
 	for _, host := range s.config.RegistryHosts {
-		item := RegistryCapability{Host: host, Label: "Wellspiking Harbor", CredentialType: "cli_secret", CredentialLabel: "CLI Secret", CredentialHint: "使用 Wellspiking Harbor 用户名和个人资料中的 CLI Secret"}
-		if host == "harbor.qomolo.com" {
-			item.Label = "Qomolo Harbor"
-			item.CredentialType = "password"
-			item.CredentialLabel = "密码"
-			item.CredentialHint = "使用 Qomolo Harbor 用户名和账号密码"
-		}
+		item := RegistryCapability{Host: host, Label: host, CredentialType: "password", CredentialLabel: "Password or CLI Secret", CredentialHint: "Use credentials issued by this Harbor registry"}
 		items = append(items, item)
 	}
 	return items

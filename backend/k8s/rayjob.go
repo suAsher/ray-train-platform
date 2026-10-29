@@ -18,9 +18,9 @@ const (
 	RayAPIVersion             = "ray.io/v1"
 	RayJobKind                = "RayJob"
 	RayJobResource            = "rayjobs"
-	managedAttemptIdentityKey = "raytrain.wellspiking.ai/cluster-attempt"
-	managedCreationFenceKey   = "raytrain.wellspiking.ai/creation-fence"
-	managedPendingAdoptionKey = "raytrain.wellspiking.ai/pending-adoption"
+	managedAttemptIdentityKey = "raytrain.io/cluster-attempt"
+	managedCreationFenceKey   = "raytrain.io/creation-fence"
+	managedPendingAdoptionKey = "raytrain.io/pending-adoption"
 )
 
 type RenderOptions struct {
@@ -32,8 +32,6 @@ type RenderOptions struct {
 	ServiceAccount             string
 	ImagePullSecrets           []string
 	SourceMaterializerImage    string
-	IDCExistingClaim           string
-	IDCMountPath               string
 	LocalCache                 LocalCacheOptions
 	// NodeSelector pins Ray Pods to the GPU training pool. It is configuration
 	// so that adding machines or changing GPU model needs no code change.
@@ -315,7 +313,7 @@ func RenderRayJob(job domain.TrainingJob, options RenderOptions) (*unstructured.
 		"platform_tenant_id":                        job.TenantID,
 		"kueue.x-k8s.io/queue-name":                 job.Spec.Queue,
 		"kueue.x-k8s.io/priority-class":             domain.WorkloadPriority(job.Spec.Priority).KubernetesPriorityClass(),
-		"platform.wellspiking.ai/accelerator-class": string(job.Spec.AcceleratorClass.Resolved()),
+		"raytrain.io/accelerator-class": string(job.Spec.AcceleratorClass.Resolved()),
 	}
 	annotations := map[string]any{
 		"ray-train-platform/job-id": job.ID,
@@ -738,18 +736,6 @@ func podTemplate(containerName, image, cpu, memory string, gpus int64, tenantID 
 	if !options.LocalCache.runtime {
 		volumeMounts = append(volumeMounts, map[string]any{"name": "ray-spill", "mountPath": "/tmp/ray-spill"})
 		volumes = append(volumes, map[string]any{"name": "ray-spill", "emptyDir": map[string]any{}})
-	}
-	useLegacyIDC := options.IDCExistingClaim != "" && !hasAnyResolvedDataRoots(jobSpec.ResolvedDataRoots)
-	if useLegacyIDC {
-		mountPath := options.IDCMountPath
-		if mountPath == "" {
-			mountPath = "/mnt/idc"
-		}
-		volumeMounts = append(volumeMounts, map[string]any{"name": "idc-storage", "mountPath": mountPath, "readOnly": true})
-		volumes = append(volumes, map[string]any{
-			"name":                  "idc-storage",
-			"persistentVolumeClaim": map[string]any{"claimName": options.IDCExistingClaim, "readOnly": true},
-		})
 	}
 	if mountData {
 		volumeMounts, volumes = appendResolvedStorageMounts(volumeMounts, volumes, jobSpec.ResolvedStorage)

@@ -28,7 +28,7 @@ func TestCreateAcceptsOnlyExplicitCompatibleWorkspaceImagesAndSnapshotsActualIma
 			case "mutable tag":
 				runner.image = RegistryHost + "/public/debug:latest"
 			case "foreign registry":
-				runner.image = "harbor.qomolo.com/public/debug@sha256:" + strings.Repeat("3", 64)
+				runner.image = "registry-secondary.example.com/public/debug@sha256:" + strings.Repeat("3", 64)
 			}
 			s, err := NewService(base.store, runner, base.registry, base.vault, cfg)
 			if err != nil {
@@ -59,7 +59,7 @@ func TestCreateAcceptsOnlyExplicitCompatibleWorkspaceImagesAndSnapshotsActualIma
 
 func TestCompatibleWorkspaceServiceConfigRejectsUnpinnedOrForeignSources(t *testing.T) {
 	base, _, _, _ := multiRegistryFixture(t)
-	for _, image := range []string{"", " ", RegistryHost + "/public/debug:latest", RegistryHost + "/public/debug@sha256:short", "harbor.qomolo.com/public/debug@sha256:" + strings.Repeat("3", 64), "evil.invalid/debug@sha256:" + strings.Repeat("3", 64)} {
+	for _, image := range []string{"", " ", RegistryHost + "/public/debug:latest", RegistryHost + "/public/debug@sha256:short", "evil.invalid/debug@sha256:" + strings.Repeat("3", 64)} {
 		cfg := base.config
 		cfg.CompatibleWorkspaceImages = []string{image}
 		if _, err := NewService(base.store, base.runner, base.registry, base.vault, cfg); !errors.Is(err, ErrInvalid) {

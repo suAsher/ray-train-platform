@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"ray-train-platform-backend/auth"
 	"ray-train-platform-backend/domain"
@@ -400,88 +399,8 @@ func TestDataSpaceBrowserUsesConfiguredTemporaryPublicRoot(t *testing.T) {
 	}
 }
 
-func TestDataSpacesListInitializesOnlyConfiguredIDCReadOnlyMounts(t *testing.T) {
-	store := &fakeDataSpaceStore{}
-	handler := NewHandler(&fakeJobRepository{}, Options{
-		DataSpaces: store, Kubernetes: platformk8s.NewClientFromInterfaces(nil, k8sfake.NewSimpleClientset()),
-		IDCDataSpacesEnabled: true, IDCDataSpacesMountCapacity: "1Pi",
-		IDCDataSpaceSources: map[domain.DataSpaceID]platformk8s.IDCDataMountSource{
-			domain.DataSpaceIDCOriginal:    {Server: "192.0.2.10", Path: "/exports/original"},
-			domain.DataSpaceIDCWellspiking: {Server: "192.0.2.11", Path: "/exports/wellspiking"},
-			domain.DataSpaceIDCShared:      {Server: "storage.example.internal", Path: "/exports/shared"},
-		},
-	})
-	router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/data-spaces", nil))
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-	}
-	if len(store.idc) != 3 {
-		t.Fatalf("configured IDC spaces were not initialized: %#v", store.idc)
-	}
-	for _, binding := range store.idc {
-		if binding.Scope != domain.DataMountScopeIDC || !binding.ReadOnly || binding.UserID != "" || binding.ClaimName == "" {
-			t.Fatalf("unsafe IDC binding: %#v", binding)
-		}
-	}
-	for _, forbidden := range []string{"192.0.2.10", "/exports/original", "claimName"} {
-		if strings.Contains(response.Body.String(), forbidden) {
-			t.Fatalf("IDC response leaked internal mount implementation %q: %s", forbidden, response.Body.String())
-		}
-	}
-}
 
-func TestDataSpacesListPreparesTenantNamespaceBeforeCreatingMounts(t *testing.T) {
-	platformNamespace := "ray-train-platform"
-	core := k8sfake.NewSimpleClientset()
-	handler := NewHandler(&fakeJobRepository{}, Options{
-		DataSpaces: &fakeDataSpaceStore{}, Kubernetes: platformk8s.NewClientFromInterfaces(nil, core), PlatformNamespace: platformNamespace,
-		IDCDataSpacesEnabled: true, IDCDataSpacesMountCapacity: "1Pi",
-		IDCDataSpaceSources: map[domain.DataSpaceID]platformk8s.IDCDataMountSource{
-			domain.DataSpaceIDCOriginal:    {Server: "192.0.2.10", Path: "/exports/original"},
-			domain.DataSpaceIDCWellspiking: {Server: "192.0.2.11", Path: "/exports/wellspiking"},
-			domain.DataSpaceIDCShared:      {Server: "storage.example.internal", Path: "/exports/shared"},
-		},
-	})
-	router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/data-spaces", nil))
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-	}
-	namespace, err := core.CoreV1().Namespaces().Get(context.Background(), "tenant-tenant-a", metav1.GetOptions{})
-	if err != nil || namespace.Labels["ray.io/tenant-id"] != "tenant-a" {
-		t.Fatalf("tenant namespace was not prepared before data mounts: namespace=%#v err=%v", namespace, err)
-	}
-}
 
-func TestDataSpacesListRetriesARecoverableFailedIDCBinding(t *testing.T) {
-	store := &fakeDataSpaceStore{bindings: []domain.DataMountBinding{
-		{ID: "idc-original-9e6cc20568b7", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCOriginal, ClaimName: "idc-original-9e6cc20568b7", ReadOnly: true, Status: domain.DataMountBindingFailed},
-		{ID: "idc-wellspiking-9e6cc20568b7", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCWellspiking, ClaimName: "idc-wellspiking-9e6cc20568b7", ReadOnly: true, Status: domain.DataMountBindingPending},
-		{ID: "idc-shared-9e6cc20568b7", TenantID: "tenant-a", Scope: domain.DataMountScopeIDC, SpaceID: domain.DataSpaceIDCShared, ClaimName: "idc-shared-9e6cc20568b7", ReadOnly: true, Status: domain.DataMountBindingPending},
-	}}
-	core := k8sfake.NewSimpleClientset()
-	handler := NewHandler(&fakeJobRepository{}, Options{
-		DataSpaces: store, Kubernetes: platformk8s.NewClientFromInterfaces(nil, core),
-		IDCDataSpacesEnabled: true, IDCDataSpacesMountCapacity: "1Pi",
-		IDCDataSpaceSources: map[domain.DataSpaceID]platformk8s.IDCDataMountSource{
-			domain.DataSpaceIDCOriginal:    {Server: "192.0.2.10", Path: "/exports/original"},
-			domain.DataSpaceIDCWellspiking: {Server: "192.0.2.11", Path: "/exports/wellspiking"},
-			domain.DataSpaceIDCShared:      {Server: "storage.example.internal", Path: "/exports/shared"},
-		},
-	})
-	router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/data-spaces", nil))
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-	}
-	if _, err := core.CoreV1().PersistentVolumes().Get(context.Background(), "ray-idc-idc-original-9e6cc20568b7", metav1.GetOptions{}); err != nil {
-		t.Fatalf("failed binding was not retried as its owned static volume: %v", err)
-	}
-}
 
 func TestDataSpacesListReturnsUnavailableWhenStoreIsMissing(t *testing.T) {
 	handler := NewHandler(&fakeJobRepository{}, Options{})
@@ -553,7 +472,7 @@ func TestDataSpaceDirectoryRouteDeclinesIDCWebBrowsing(t *testing.T) {
 	router := dataSpaceRouter(handler, auth.Principal{Subject: "user-a", TenantID: "tenant-a", Roles: []string{domain.RoleEngineer}, AuthType: auth.AuthTypeLocal})
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/data-spaces/idc-original/directories", nil))
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "DATA_SPACE_BROWSER_NOT_AVAILABLE") {
+	if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), "DATA_SPACE_NOT_FOUND") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

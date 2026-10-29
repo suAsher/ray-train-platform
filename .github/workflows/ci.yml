@@ -1,98 +1,127 @@
-name: Validate, Build and Publish Ray Training Platform
-
+name: CI
 on:
   push:
-    branches: [main, master]
-    tags: ["v*"]
+    branches: ['**']
+    tags: ['v*']
   pull_request:
-    branches: [main, master]
-
-env:
-  REGISTRY: cr-cn-beijing.volces.com
-  IMAGE_NAMESPACE: ray-platform
-
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  validate:
-    name: Validate source and delivery contract
+  backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: raytrain
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: raytrain_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U raytrain -d raytrain_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
-
-      - name: Test Go backend
+      - name: Formatting gate
+        id: formatting
         working-directory: backend
         run: |
-          test -z "$(gofmt -l .)"
-          go vet ./...
-          go test ./...
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
+          gofmt -d . > /tmp/gofmt.patch
+          test ! -s /tmp/gofmt.patch
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          node-version: 20
+          name: gofmt-patch
+          path: /tmp/gofmt.patch
+          if-no-files-found: error
+      - name: Go vet
+        if: ${{ !cancelled() }}
+        working-directory: backend
+        run: go vet ./...
+      - name: Go and PostgreSQL regression
+        if: ${{ !cancelled() }}
+        working-directory: backend
+        env:
+          POSTGRES_TEST_DSN: postgres://raytrain:ci-only-password@localhost:5432/raytrain_test?sslmode=disable
+        run: go test -timeout=25m ./...
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Test and build Portal
+      - name: Install UI dependencies
         working-directory: frontend
-        run: |
-          npm ci
-          npm test
-          npm run build
-
-      - name: Validate Ray runtime image contracts
-        run: bash scripts/test-ray-runtime-images.sh --contract-only
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v4
-
-      - name: Validate Helm delivery profiles
+        run: npm ci
+      - name: UI tests
+        working-directory: frontend
+        run: npm test
+      - name: UI build
+        if: ${{ !cancelled() }}
+        working-directory: frontend
+        run: npm run build
+  helm-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Portable chart contract
         run: bash scripts/test-delivery-render.sh
-
-      - name: Validate safe reset preview
+      - name: Public runtime image contract
+        if: ${{ !cancelled() }}
+        run: bash scripts/test-ray-runtime-images.sh --contract-only
+      - name: Optional chart contracts
+        if: ${{ !cancelled() }}
         run: |
-          bash -n ops/platform/lib/common.sh ops/platform/*.sh
-          bash ops/platform/test/reset-preview-test.sh
-
-  build-images:
-    name: Build and publish platform images
-    needs: validate
+          bash helm/ray-node-onboarding/tests/render-contract.sh
+          bash helm/ray-cache-local/tests/render-contract.sh
+          bash helm/ray-cache-local/tests/dual-render-contract.sh
+          bash helm/ray-cache-local/tests/monitor-contract.sh
+          helm lint helm/ray-observability
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build unified platform image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [backend, frontend, helm-runtime, image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to container registry
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.VOLC_CR_USERNAME }}
-          password: ${{ secrets.VOLC_CR_PASSWORD }}
-
-      - name: Build backend
-        uses: docker/build-push-action@v6
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Lowercase image namespace
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      - uses: docker/build-push-action@v6
         with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ray-train-backend:${{ github.sha }}
-
-      - name: Build Portal
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/ray-train-frontend:${{ github.sha }}
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.ref_name }}

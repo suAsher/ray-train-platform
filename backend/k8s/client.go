@@ -202,27 +202,6 @@ func (c *Client) EnsureDataMountResources(ctx context.Context, binding domain.Da
 	return existingPVC.Status.Phase == corev1.ClaimBound, nil
 }
 
-// EnsureIDCDataMountResources creates a platform-owned static NFS PV/PVC
-// pair. As with TOS adapters, it only accepts matching resources carrying the
-// binding label and never modifies or deletes a pre-existing object.
-func (c *Client) EnsureIDCDataMountResources(ctx context.Context, binding domain.DataMountBinding, namespace, capacity string, source IDCDataMountSource) (bool, error) {
-	if c == nil || c.kubernetes == nil {
-		return false, fmt.Errorf("Kubernetes client is not initialized")
-	}
-	pv, pvc, err := BuildIDCDataMountResources(binding, namespace, capacity, source)
-	if err != nil {
-		return false, err
-	}
-	if err := ensureOwnedIDCDataMountPV(ctx, c.kubernetes.CoreV1().PersistentVolumes(), pv, binding.ID); err != nil {
-		return false, err
-	}
-	existingPVC, err := ensureOwnedPersistentVolumeClaim(ctx, c.kubernetes.CoreV1().PersistentVolumeClaims(namespace), pvc, binding.ID)
-	if err != nil {
-		return false, err
-	}
-	return existingPVC.Status.Phase == corev1.ClaimBound, nil
-}
-
 func ensureOwnedPersistentVolume(ctx context.Context, client corev1client.PersistentVolumeInterface, desired *corev1.PersistentVolume, bindingID string) error {
 	existing, err := client.Get(ctx, desired.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -249,28 +228,6 @@ func ensureOwnedPersistentVolume(ctx context.Context, client corev1client.Persis
 	return nil
 }
 
-func ensureOwnedIDCDataMountPV(ctx context.Context, client corev1client.PersistentVolumeInterface, desired *corev1.PersistentVolume, bindingID string) error {
-	existing, err := client.Get(ctx, desired.Name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		if _, err := client.Create(ctx, desired, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("validate IDC data mount PV %s: %w", desired.Name, err)
-		}
-		if _, err := client.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create IDC data mount PV %s: %w", desired.Name, err)
-		}
-		existing, err = client.Get(ctx, desired.Name, metav1.GetOptions{})
-	}
-	if err != nil {
-		return fmt.Errorf("get IDC data mount PV %s: %w", desired.Name, err)
-	}
-	if err := verifyDataMountOwnership(existing.Labels, bindingID); err != nil {
-		return fmt.Errorf("refusing to use IDC data mount PV %s: %w", desired.Name, err)
-	}
-	if existing.Spec.NFS == nil || desired.Spec.NFS == nil || existing.Spec.NFS.Server != desired.Spec.NFS.Server || existing.Spec.NFS.Path != desired.Spec.NFS.Path || !existing.Spec.NFS.ReadOnly {
-		return fmt.Errorf("refusing to use IDC data mount PV %s with a different read-only NFS contract", desired.Name)
-	}
-	return nil
-}
 
 func ensureOwnedPersistentVolumeClaim(ctx context.Context, client corev1client.PersistentVolumeClaimInterface, desired *corev1.PersistentVolumeClaim, bindingID string) (*corev1.PersistentVolumeClaim, error) {
 	existing, err := client.Get(ctx, desired.Name, metav1.GetOptions{})

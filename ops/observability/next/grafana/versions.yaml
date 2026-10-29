@@ -1,8 +1,0 @@
-grafana: 13.1.1
-grafanaBase: harbor.wellspiking.ai/hub/grafana/grafana:13.1.1@sha256:7cb8c64c4d57a57e734073f3cc94620adb24a0acb929bd80ba9f14017e3a975b
-clickhousePlugin:
-  id: grafana-clickhouse-datasource
-  version: 4.22.1
-cloudnativePgChart: 0.29.1
-# CNPG/PostgreSQL/Envoy exact runtime digests are inherited from the reviewed
-# Nightingale hardening baseline; common.py and cnpg-values.yaml pin them.

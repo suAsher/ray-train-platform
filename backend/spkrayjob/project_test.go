@@ -16,7 +16,7 @@ func TestProjectFileSuppliesSubmitDefaults(t *testing.T) {
 	root := t.TempDir()
 	contents := `name: bevfusion-lidar
 image: harbor.example.com/team/bevfusion@sha256:1111111111111111111111111111111111111111111111111111111111111111
-entrypoint: python tools/westwell_train.py configs/x.yaml --launcher pytorch
+entrypoint: python tools/train.py configs/x.yaml --launcher pytorch
 acceleratorClass: a100
 priority: production
 workers: 1

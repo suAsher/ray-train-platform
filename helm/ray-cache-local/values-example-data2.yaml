@@ -1,0 +1,20 @@
+fullnameOverride: ray-cache-local-data2
+
+storageClass:
+  name: ray-cache-local-data2
+  provisioner: raytrain.io/local-path-data2
+  reclaimPolicy: Delete
+  volumeBindingMode: WaitForFirstConsumer
+  allowVolumeExpansion: false
+
+nodePathMap:
+  - node: "gpu-node-a"
+    paths: [/data2/ray-cache]
+  - node: "gpu-node-b"
+    paths: [/data2/ray-cache]
+
+cache:
+  allowedRoots: [/data2/ray-cache]
+
+monitoring:
+  enabled: false

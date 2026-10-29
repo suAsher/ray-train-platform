@@ -11,7 +11,7 @@ import (
 
 func TestEnvironmentProfileBindsEveryExecutionPhaseToWorkspaceBase(t *testing.T) {
 	r := environmentTestRunner()
-	p := environmentbuild.WorkspaceProfile{WorkspaceImage: "harbor.wellspiking.ai/public/debug-cu126@sha256:" + strings.Repeat("5", 64), BaseImage: "harbor.wellspiking.ai/public/base-cu126@sha256:" + strings.Repeat("6", 64), PrepareImage: "harbor.wellspiking.ai/public/prepare-cu126@sha256:" + strings.Repeat("7", 64)}
+	p := environmentbuild.WorkspaceProfile{WorkspaceImage: "registry.example.com/public/debug-cu126@sha256:" + strings.Repeat("5", 64), BaseImage: "registry.example.com/public/base-cu126@sha256:" + strings.Repeat("6", 64), PrepareImage: "registry.example.com/public/prepare-cu126@sha256:" + strings.Repeat("7", 64)}
 	cfg := r.config
 	cfg.WorkspaceProfiles = []environmentbuild.WorkspaceProfile{p}
 	r = NewEnvironmentRunner(r.client, cfg)
@@ -47,7 +47,7 @@ func TestEnvironmentProfileBindsEveryExecutionPhaseToWorkspaceBase(t *testing.T)
 
 func TestEnvironmentProfileCaptureUsesPairedBaseAndVerifiedActualImage(t *testing.T) {
 	r := environmentTestRunner()
-	p := environmentbuild.WorkspaceProfile{WorkspaceImage: "harbor.wellspiking.ai/public/debug-cu126@sha256:" + strings.Repeat("5", 64), BaseImage: "harbor.wellspiking.ai/public/base-cu126@sha256:" + strings.Repeat("6", 64), PrepareImage: "harbor.wellspiking.ai/public/prepare-cu126@sha256:" + strings.Repeat("7", 64)}
+	p := environmentbuild.WorkspaceProfile{WorkspaceImage: "registry.example.com/public/debug-cu126@sha256:" + strings.Repeat("5", 64), BaseImage: "registry.example.com/public/base-cu126@sha256:" + strings.Repeat("6", 64), PrepareImage: "registry.example.com/public/prepare-cu126@sha256:" + strings.Repeat("7", 64)}
 	cfg := r.config
 	cfg.WorkspaceProfiles = []environmentbuild.WorkspaceProfile{p}
 	r = NewEnvironmentRunner(r.client, cfg)

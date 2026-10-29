@@ -28,18 +28,18 @@ func TestEnvironmentAuthorizationAPIRoutesOnlyApprovedRegistryHosts(t *testing.T
 		status           int
 	}{
 		{"legacy", `{"username":"person","secret":"fixture-secret"}`, eb.RegistryHost, 403},
-		{"Wellspiking", `{"registryHost":"harbor.wellspiking.ai","username":"person","secret":"fixture-secret"}`, eb.RegistryHost, 403},
-		{"Qomolo", `{"registryHost":"harbor.qomolo.com","username":"person","secret":"fixture-secret"}`, "harbor.qomolo.com", 403},
+		{"Primary", `{"registryHost":"registry.example.com","username":"person","secret":"fixture-secret"}`, eb.RegistryHost, 403},
+		{"Secondary", `{"registryHost":"registry-secondary.example.com","username":"person","secret":"fixture-secret"}`, "registry-secondary.example.com", 403},
 		{"forged", `{"registryHost":"evil.invalid","username":"person","secret":"fixture-secret"}`, "", 400},
-		{"URL", `{"registryHost":"https://harbor.qomolo.com","username":"person","secret":"fixture-secret"}`, "", 400},
-		{"duplicate host", `{"registryHost":"harbor.qomolo.com","registryHost":"harbor.wellspiking.ai","username":"person","secret":"fixture-secret"}`, "", 400},
-		{"unknown password", `{"registryHost":"harbor.qomolo.com","username":"person","password":"fixture-secret"}`, "", 400},
-		{"unknown token", `{"registryHost":"harbor.qomolo.com","username":"person","secret":"fixture-secret","token":"fixture"}`, "", 400},
-		{"uppercase host field", `{"RegistryHost":"harbor.qomolo.com","username":"person","secret":"fixture-secret"}`, "", 400},
+		{"URL", `{"registryHost":"https://registry-secondary.example.com","username":"person","secret":"fixture-secret"}`, "", 400},
+		{"duplicate host", `{"registryHost":"registry-secondary.example.com","registryHost":"registry.example.com","username":"person","secret":"fixture-secret"}`, "", 400},
+		{"unknown password", `{"registryHost":"registry-secondary.example.com","username":"person","password":"fixture-secret"}`, "", 400},
+		{"unknown token", `{"registryHost":"registry-secondary.example.com","username":"person","secret":"fixture-secret","token":"fixture"}`, "", 400},
+		{"uppercase host field", `{"RegistryHost":"registry-secondary.example.com","username":"person","secret":"fixture-secret"}`, "", 400},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry := &environmentHostRegistry{}
-			service, err := eb.NewService(&environmentAPIStore{}, &environmentAPIRunner{}, registry, &environmentAPIVault{}, eb.Config{Enabled: true, RegistryHosts: []string{eb.RegistryHost, "harbor.qomolo.com"}, BaseImage: "example.com/base@sha256:" + strings.Repeat("1", 64), WorkspaceImage: "example.com/debug@sha256:" + strings.Repeat("2", 64), EncryptionKey: []byte(strings.Repeat("k", 32))})
+			service, err := eb.NewService(&environmentAPIStore{}, &environmentAPIRunner{}, registry, &environmentAPIVault{}, eb.Config{Enabled: true, RegistryHosts: []string{eb.RegistryHost, "registry-secondary.example.com"}, BaseImage: "registry.example.com/base@sha256:" + strings.Repeat("1", 64), WorkspaceImage: "registry.example.com/debug@sha256:" + strings.Repeat("2", 64), EncryptionKey: []byte(strings.Repeat("k", 32))})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -61,8 +61,8 @@ func TestEnvironmentAuthorizationAPIRoutesOnlyApprovedRegistryHosts(t *testing.T
 			} else if len(registry.hosts) != 1 || registry.hosts[0] != tc.host {
 				t.Fatalf("wrong credential destination: %v", registry.hosts)
 			}
-			if tc.host == "harbor.qomolo.com" && !strings.Contains(response.Body.String(), "密码") {
-				t.Fatal("Qomolo denial incorrectly requires CLI Secret only")
+			if tc.host == "registry-secondary.example.com" && !strings.Contains(response.Body.String(), "密码") {
+				t.Fatal("Secondary registry denial incorrectly requires CLI Secret only")
 			}
 		})
 	}

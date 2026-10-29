@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-const CacheReadyLabel = "platform.wellspiking.ai/cache-ready"
+const CacheReadyLabel = "raytrain.io/cache-ready"
 const defaultNode = "DEFAULT_PATH_FOR_NON_LISTED_NODES"
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)

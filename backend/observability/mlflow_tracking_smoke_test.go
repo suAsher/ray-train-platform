@@ -20,7 +20,7 @@ func TestMLflowTrackingProviderMLflow314Smoke(t *testing.T) {
 		t.Skip("set MLFLOW_TRACKING_SMOKE_URL to an isolated MLflow 3.14 service URL to run this write smoke")
 	}
 	validateTrackingSmokeURL(t, baseURL)
-	t.Log("expected isolated service image: harbor.wellspiking.ai/guofeng.su/mlflow:v3.14.0-full@sha256:03c206d175084ee3f654a1353ab62ccd2e59048c54f9488f08cc4d8f5de0037d in namespace mlflow-system")
+	t.Log("expected isolated service image: registry.example.com/raytrain/mlflow:v3.14.0-full@sha256:03c206d175084ee3f654a1353ab62ccd2e59048c54f9488f08cc4d8f5de0037d in namespace mlflow-system")
 
 	operationID := randomTrackingOperationID(t)
 	key := []byte(strings.Repeat("s", 32))

@@ -19,22 +19,6 @@ func setValidDatasetPublisherConfig(t *testing.T) {
 	t.Setenv("DATASET_PUBLISHER_PRIORITY_CLASS_NAME", "release-dataset-publisher-low")
 }
 
-func TestValidateIDCSyncRequiresPublisherToReadTheSameBucket(t *testing.T) {
-	cfg := Config{
-		IDCSyncEnabled: true, IDCDataSpacesEnabled: true,
-		IDCSyncImage:  "registry.example/idc-sync@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		IDCSyncBucket: "raw-sync-bucket", IDCSyncTosutilConfigSecret: "tosutil",
-		IDCSyncServiceAccount: "idc-sync", IDCSyncWorkClaimName: "idc-sync-work",
-		DatasetPublisherEnabled: true, DatasetPublisherSourceBucket: "publisher-source-bucket",
-		IDCDataSpaceSources: map[string]IDCDataSpaceSource{"original": {Server: "192.0.2.10", Path: "/exports/original"}},
-	}
-
-	err := validateIDCSyncConfig(cfg)
-	if err == nil || !strings.Contains(err.Error(), "DATASET_PUBLISHER_SOURCE_BUCKET") {
-		t.Fatalf("mismatched lifecycle buckets were accepted: %v", err)
-	}
-}
-
 func TestLoadAcceptsDatasetPublisherCredentialSecretReference(t *testing.T) {
 	setValidDatasetPublisherConfig(t)
 	t.Setenv("DATASET_VERSIONING_ENABLED", "true")
@@ -105,15 +89,16 @@ func TestLoadRejectsDemoModeInProduction(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsDisabledOIDCInProduction(t *testing.T) {
+func TestLoadRejectsProductionWithoutAnyAuthentication(t *testing.T) {
 	setValidProductionConfig(t)
 	t.Setenv("OIDC_REQUIRED", "false")
+	t.Setenv("LOCAL_AUTH_ENABLED", "false")
 
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected production OIDC validation error")
 	}
-	if err.Error() != "OIDC_REQUIRED cannot be disabled in production" {
+	if err.Error() != "production requires OIDC authentication or local authentication with PAT enabled" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -647,71 +632,6 @@ func TestLoadRejectsEnabledDataSpacesWithoutSecretlessFSXContract(t *testing.T) 
 	t.Setenv("DATA_SPACES_MOUNT_CAPACITY", "1Ti")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DATA_SPACES_FSX_VOLUME_ATTRIBUTES_JSON") {
 		t.Fatalf("expected a secretless FSX contract error, got %v", err)
-	}
-}
-
-func TestLoadRejectsIDCWithoutExistingClaim(t *testing.T) {
-	t.Setenv("APP_ENV", "development")
-	t.Setenv("PAT_ENABLED", "false")
-	t.Setenv("IDC_STORAGE_ENABLED", "true")
-	t.Setenv("IDC_EXISTING_CLAIM", "")
-	t.Setenv("IDC_STORAGE_CLASS", "fast")
-	if _, err := Load(); err == nil {
-		t.Fatal("expected IDC existing claim validation error")
-	}
-}
-
-func TestLoadAcceptsGovernedIDCDataSpacesWithoutLegacyClaim(t *testing.T) {
-	t.Setenv("APP_ENV", "development")
-	t.Setenv("PAT_ENABLED", "false")
-	t.Setenv("IDC_STORAGE_ENABLED", "false")
-	t.Setenv("IDC_DATA_SPACES_ENABLED", "true")
-	t.Setenv("IDC_DATA_SPACES_MOUNT_CAPACITY", "1Pi")
-	t.Setenv("IDC_DATA_SPACES_SOURCES_JSON", `{
-      "original":{"server":"192.0.2.10","path":"/exports/original"},
-      "wellspiking":{"server":"192.0.2.11","path":"/exports/wellspiking"},
-      "shared":{"server":"storage.example.internal","path":"/exports/shared"},
-      "spk-hybrid":{"server":"192.0.2.12","path":"/exports/hybrid","mountOptions":["ro","vers=3"]},
-      "spk-ssd":{"server":"192.0.2.13","path":"/exports/ssd","mountOptions":["ro","vers=3"]}
-    }`)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("load governed IDC data spaces: %v", err)
-	}
-	if !cfg.IDCDataSpacesEnabled || cfg.IDCDataSpaceSources["shared"].Path != "/exports/shared" {
-		t.Fatalf("unexpected governed IDC configuration: %#v", cfg)
-	}
-}
-
-func TestLoadRejectsIncompleteGovernedIDCDataSpaces(t *testing.T) {
-	t.Setenv("APP_ENV", "development")
-	t.Setenv("PAT_ENABLED", "false")
-	t.Setenv("IDC_STORAGE_ENABLED", "false")
-	t.Setenv("IDC_DATA_SPACES_ENABLED", "true")
-	t.Setenv("IDC_DATA_SPACES_MOUNT_CAPACITY", "1Pi")
-	t.Setenv("IDC_DATA_SPACES_SOURCES_JSON", `{"original":{"server":"192.0.2.10","path":"/exports/original"}}`)
-
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "wellspiking") {
-		t.Fatalf("expected complete IDC source validation error, got %v", err)
-	}
-}
-
-func TestLoadRejectsWritableIDCMountOption(t *testing.T) {
-	t.Setenv("APP_ENV", "development")
-	t.Setenv("PAT_ENABLED", "false")
-	t.Setenv("IDC_STORAGE_ENABLED", "false")
-	t.Setenv("IDC_DATA_SPACES_ENABLED", "true")
-	t.Setenv("IDC_DATA_SPACES_MOUNT_CAPACITY", "1Pi")
-	t.Setenv("IDC_DATA_SPACES_SOURCES_JSON", `{
-      "original":{"server":"192.0.2.10","path":"/exports/original","mountOptions":["rw"]},
-      "wellspiking":{"server":"192.0.2.11","path":"/exports/wellspiking","mountOptions":["ro"]},
-      "shared":{"server":"192.0.2.12","path":"/exports/shared","mountOptions":["ro"]},
-      "spk-hybrid":{"server":"192.0.2.13","path":"/exports/hybrid","mountOptions":["ro","vers=3"]},
-      "spk-ssd":{"server":"192.0.2.14","path":"/exports/ssd","mountOptions":["ro","vers=3"]}
-    }`)
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "mountOptions") {
-		t.Fatalf("expected read-only IDC mount option validation error, got %v", err)
 	}
 }
 

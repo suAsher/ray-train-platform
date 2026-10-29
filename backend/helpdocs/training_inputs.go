@@ -7,7 +7,7 @@ const localSourceCLIGuide = `### 本地源码通过 CLI 提交训练
 先单独执行下面的登录命令；按“个人访问令牌”提示输入 PAT 并回车，终端不回显。看到登录成功后，再执行检查和镜像查询，不要把后续命令粘贴到令牌提示里。
 
 ~~~bash
-spk-rayjob login --server https://raytrain.wellspiking.ai --token-stdin
+spk-rayjob login --server https://raytrain.example.com --token-stdin
 ~~~
 
 ~~~bash

@@ -8,39 +8,7 @@ import (
 	"ray-train-platform-backend/domain"
 )
 
-func TestBuildIDCDataMountResourcesCreatesRetainedReadOnlyNFSVolume(t *testing.T) {
-	binding, err := domain.NewIDCDataMountBinding("idc-original-a", "tenant-a", domain.DataSpaceIDCOriginal, "idc-original-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pv, pvc, err := BuildIDCDataMountResources(binding, "tenant-tenant-a", "1Pi", IDCDataMountSource{Server: "192.0.2.20", Path: "/exports/original"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pv.Spec.PersistentVolumeReclaimPolicy != "Retain" || pv.Spec.NFS == nil || pv.Spec.NFS.Server != "192.0.2.20" || pv.Spec.NFS.Path != "/exports/original" || !pv.Spec.NFS.ReadOnly {
-		t.Fatalf("unexpected IDC PV contract: %#v", pv.Spec)
-	}
-	if got := pvc.Spec.AccessModes; len(got) != 1 || got[0] != "ReadOnlyMany" || pvc.Spec.VolumeName != pv.Name || pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "" {
-		t.Fatalf("unexpected IDC PVC contract: %#v", pvc.Spec)
-	}
-}
 
-func TestBuildIDCDataMountResourcesPreservesApprovedNFSv3Options(t *testing.T) {
-	binding, err := domain.NewIDCDataMountBinding("idc-spk-ssd-a", "tenant-a", "idc-spk-ssd", "idc-spk-ssd-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pv, _, err := BuildIDCDataMountResources(binding, "tenant-tenant-a", "1Pi", IDCDataMountSource{
-		Server: "nfs-flash-yrfs.wellspiking.ai", Path: "/mnt/yrfs/wellspiking/data",
-		MountPath: "/mnt/.spk-ssd", MountOptions: []string{"ro", "vers=3", "hard", "timeo=600", "retrans=2", "rsize=1048576", "wsize=1048576", "noatime", "_netdev", "nofail"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !pv.Spec.NFS.ReadOnly || !reflect.DeepEqual(pv.Spec.MountOptions, []string{"ro", "vers=3", "hard", "timeo=600", "retrans=2", "rsize=1048576", "wsize=1048576", "noatime", "_netdev", "nofail"}) {
-		t.Fatalf("IDC NFSv3 mount options are not preserved as an immutable read-only contract: %#v", pv.Spec)
-	}
-}
 
 func TestBuildDataMountResourcesCreatesSecretlessRetainedFSXVolume(t *testing.T) {
 	binding := domain.DataMountBinding{
@@ -111,7 +79,6 @@ func TestDevWorkspaceMountsPersonalAndReadonlyDataSpaces(t *testing.T) {
 		Personal:    &DataMountRoot{ClaimName: "data-user-a"},
 		Team:        &DataMountRoot{ClaimName: "data-team-a", ReadOnly: true},
 		Public:      &DataMountRoot{ClaimName: "data-public", ReadOnly: true},
-		IDCOriginal: &DataMountRoot{ClaimName: "idc-original-ro", ReadOnly: true},
 	}
 	manifest, err := RenderDevRayCluster(workspace, WorkspaceRenderOptions{
 		Image: "registry.example/dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", DataMounts: plan,
@@ -127,7 +94,6 @@ func TestDevWorkspaceMountsPersonalAndReadonlyDataSpaces(t *testing.T) {
 		assertStorageMount(t, pod, "platform-data-personal", "data-user-a", domain.MyStorageMountPath, false)
 		assertStorageMount(t, pod, "platform-data-team", "data-team-a", domain.TeamStorageMountPath, true)
 		assertStorageMount(t, pod, "platform-data-public", "data-public", domain.PublicStorageMountPath, true)
-		assertStorageMount(t, pod, "platform-data-idc-original", "idc-original-ro", domain.IDCOriginalMountPath, true)
 		if got := pod["automountServiceAccountToken"]; got != false {
 			t.Fatalf("%s pod must not mount a Kubernetes API token by default: %#v", group, pod)
 		}

@@ -1,3 +1,0 @@
-{{- /* Legacy storage.existingClaim resources were intentionally removed.
-      Governed IDC NFS mounts are created by the API as labelled, tenant-local
-      ReadOnlyMany PV/PVC pairs after idcDataSpaces validation. */ -}}

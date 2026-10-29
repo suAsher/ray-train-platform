@@ -4,7 +4,7 @@ import "sort"
 
 // DedicatedTenantTaintKey keeps pre-cutover templates and non-platform Pods
 // from entering a newly dedicated node. NoSchedule never evicts existing Pods.
-const DedicatedTenantTaintKey = "platform.wellspiking.ai/dedicated-tenant"
+const DedicatedTenantTaintKey = "raytrain.io/dedicated-tenant"
 
 // dedicatedNodeAffinity is independent of TAS and soft team preferences. The
 // server-owned assignment is included in each PodSet before Kueue admission.

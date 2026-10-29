@@ -73,8 +73,8 @@ var completionEnums = map[string]string{
 	"dataset-cache-policy": "off auto bounded", "dataset-version": "latest",
 	"execution-mode": "auto single_gpu torchrun ray_train", "cache-mode": "off runtime",
 	"cache-preload": "input", "ray-data-format": "parquet images",
-	"input-space":      "my-storage my-files my-runs team-shared public idc-original idc-wellspiking idc-shared idc-spk-hybrid idc-spk-ssd",
-	"checkpoint-space": "my-storage my-files my-runs team-shared public idc-original idc-wellspiking idc-shared idc-spk-hybrid idc-spk-ssd",
+	"input-space":      "my-storage my-files my-runs team-shared public",
+	"checkpoint-space": "my-storage my-files my-runs team-shared public",
 	"state":            "SUBMITTED VALIDATING QUEUED ADMITTED PROVISIONING RUNNING RECOVERING SUCCEEDED FAILED CANCELING CANCELED TIMED_OUT UNKNOWN DELETING",
 }
 

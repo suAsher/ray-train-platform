@@ -16,7 +16,8 @@ import subprocess
 import sys
 import zipfile
 
-BASE_IMAGE = 'harbor.wellspiking.ai/guofeng.su/raytrain-base@sha256:3ec73cf863847a42bcac035309259ad9d08fd74561384cc8476020c62264d6e2'
+# Selected exclusively by a root-owned image profile, never environment variables.
+BASE_IMAGE = ''
 ENVIRONMENT = Path('/opt/raytrain/environment')
 BASELINE = Path('/opt/raytrain/environment-baseline.json')
 MAX_MANIFEST_BYTES = 1024 * 1024
@@ -67,7 +68,7 @@ def load_profile():
     if not isinstance(value, dict) or set(value) != {'schemaVersion', 'baseImage', 'basePython', 'versions'}:
         raise CaptureError('Invalid runtime profile fields', 'PACKAGE_MODIFIED')
     if value['schemaVersion'] != 1 or not isinstance(value['baseImage'], str) or not re.fullmatch(
-            r'harbor\.wellspiking\.ai/guofeng\.su/[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}', value['baseImage']):
+            r'(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}', value['baseImage']):
         raise CaptureError('Runtime profile must identify an immutable platform base', 'PACKAGE_MODIFIED')
     if value['basePython'] not in ('/home/ray/anaconda3/bin/python3', '/usr/bin/python3.10'):
         raise CaptureError('Runtime profile selects an unsupported base interpreter', 'PACKAGE_MODIFIED')
@@ -93,7 +94,7 @@ if ACTIVE_PROFILE is not None:
 
 
 def verify_active_profile():
-    if PROFILE_ERROR or load_profile() != ACTIVE_PROFILE:
+    if PROFILE_ERROR or ACTIVE_PROFILE is None or load_profile() != ACTIVE_PROFILE:
         raise CaptureError('Runtime profile changed after startup', 'PACKAGE_MODIFIED')
 
 

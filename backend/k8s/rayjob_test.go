@@ -52,7 +52,7 @@ func TestRenderRayJobProducesKueueManagedRayJob(t *testing.T) {
 	if labels["app.kubernetes.io/part-of"] != "ray-train-platform" {
 		t.Fatalf("RayJob must carry the platform ownership label: %#v", labels)
 	}
-	if labels["kueue.x-k8s.io/priority-class"] != "raytrain-normal" || labels["platform.wellspiking.ai/accelerator-class"] != "rtx4090" {
+	if labels["kueue.x-k8s.io/priority-class"] != "raytrain-normal" || labels["raytrain.io/accelerator-class"] != "rtx4090" {
 		t.Fatalf("RayJob must carry normalized scheduling labels: %#v", labels)
 	}
 	spec, ok, err := nestedMap(manifest.Object, "spec")
@@ -262,34 +262,6 @@ func TestRayDDPUsesPerJobRayVersionWithOptionsOnlyAsLegacyFallback(t *testing.T)
 	}
 }
 
-func TestRenderRayJobCanMountIDCClaim(t *testing.T) {
-	job := validRenderJob()
-	options := testRenderOptions()
-	options.ClusterSpecField = "rayClusterSpec"
-	options.IDCExistingClaim = "idc-rwx"
-	options.IDCMountPath = "/mnt/idc"
-	manifest, err := RenderRayJob(job, options)
-	if err != nil {
-		t.Fatalf("render ray job with IDC claim: %v", err)
-	}
-	spec, _, _ := nestedMap(manifest.Object, "spec")
-	cluster, _, _ := nestedMap(spec, "rayClusterSpec")
-	workerGroups, _, _ := nestedSlice(cluster, "workerGroupSpecs")
-	worker := workerGroups[0].(map[string]any)
-	workerPod, _, _ := nestedMap(worker, "template", "spec")
-	volumes, _, _ := nestedSlice(workerPod, "volumes")
-	foundPVC := false
-	for _, volume := range volumes {
-		v := volume.(map[string]any)
-		claim, exists := v["persistentVolumeClaim"].(map[string]any)
-		if exists && claim["claimName"] == "idc-rwx" {
-			foundPVC = true
-		}
-	}
-	if !foundPVC {
-		t.Fatalf("expected IDC PVC volume: %#v", volumes)
-	}
-}
 
 func TestRenderRayJobRejectsLegacyArtifactSource(t *testing.T) {
 	job := validRenderJob()

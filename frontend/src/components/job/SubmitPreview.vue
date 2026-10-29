@@ -95,18 +95,18 @@ const managedSummary = computed(() => (
   `保留最近 ${Number(props.form.checkpointKeepLatest || 0)} / 最佳 ${Number(props.form.checkpointKeepBest || 0)}`
 ))
 
-const outputSummary = computed(() => (props.form.output?.spaceId === 'my-runs'
+const outputSummary = computed(() => (props.form.outputStorage?.assetId ? `PVC 资产：${props.form.outputStorage.assetId}` : props.form.output?.spaceId === 'my-runs'
   ? '我的训练结果 · 平台自动创建独立 runs/<job-id>'
   : '尚未选择训练结果空间'))
 
 const cacheSummary = computed(() => {
   const labels = {
-    mount: '直接读取 TOS/IDC',
+    mount: '直接读取 已登记存储',
     cache: 'NVMe 预热',
     'ray-data-stage': 'Ray Data 分布式预热 + NVMe',
     streaming: '版本化 Ray Data 流式读取',
   }
-  const label = labels[props.form.dataMode] || '直接读取 TOS/IDC'
+  const label = labels[props.form.dataMode] || '直接读取 已登记存储'
   if (props.form.dataMode === 'streaming') {
     const policies = { auto: '平台自动选择缓存', off: '关闭工作集缓存', bounded: '双 NVMe 有界工作集' }
     return `${label} · ${policies[props.form.datasetCachePolicy] || policies.auto}`

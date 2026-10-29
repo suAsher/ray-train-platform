@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: PLACEHOLDER_ASSISTANT_NAMESPACE
-  labels:
-    app.kubernetes.io/part-of: ray-train-platform
-    raytrain.wellspiking.ai/component: assistant-idle

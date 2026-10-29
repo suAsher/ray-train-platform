@@ -119,7 +119,7 @@ func lifecycleFixture(t *testing.T) (*Service, *lifecycleStore, *lifecycleRunner
 	runner := &lifecycleRunner{}
 	registry := &lifecycleRegistry{}
 	vault := &lifecycleVault{}
-	s, err := NewService(store, runner, registry, vault, Config{Enabled: true, BaseImage: "harbor.wellspiking.ai/public/base@sha256:" + strings.Repeat("1", 64), WorkspaceImage: "harbor.wellspiking.ai/public/debug@sha256:" + strings.Repeat("2", 64), EncryptionKey: []byte(strings.Repeat("k", 32))})
+	s, err := NewService(store, runner, registry, vault, Config{Enabled: true, BaseImage: "registry.example.com/public/base@sha256:" + strings.Repeat("1", 64), WorkspaceImage: "registry.example.com/public/debug@sha256:" + strings.Repeat("2", 64), EncryptionKey: []byte(strings.Repeat("k", 32))})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,43 @@
+# Supply image references from your own build. No image publication is assumed.
+global:
+  imageRegistry: registry.example.com/your-project
+backend:
+  replicaCount: 1
+  appEnv: development
+  image:
+    repository: ray-train-platform
+    tag: dev
+  workspaceImage: REPLACE_WITH_WORKSPACE_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST
+  sourceMaterializerImage: REPLACE_WITH_MATERIALIZER_IMAGE@sha256:REPLACE_WITH_64_HEX_DIGEST
+  imageAllowlist:
+    - rayproject/ray
+    - registry.example.com/your-project
+  gitAllowlist:
+    - github.com
+  # Build images/train-pytorch: the upstream Ray image lacks raytrain-launch.
+  rayAPIDefaultImage: ""
+postgres:
+  mode: standalone
+  standalone:
+    storageClass: ""
+    size: 20Gi
+availability:
+  pdbEnabled: false
+ingress:
+  enabled: false
+# Install KubeRay and Kueue first. Adjust labels and limits to your GPU pool.
+training:
+  nodeSelector: accelerator=nvidia-rtx-4090
+  maxWorkerReplicas: 4
+  maxGPUsPerWorker: 8
+  maxTotalGPUs: 32
+kueue:
+  enabled: true
+  manageResources: true
+  autoQuota: true
+  gpuQuota: 0
+  topology:
+    enabled: false
+    teamNodeAffinityEnabled: false
+  preemption:
+    enabled: false

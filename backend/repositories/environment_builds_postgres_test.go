@@ -21,7 +21,7 @@ func TestEnvironmentBuildPostgresAdmissionOwnerAndCredentialRoundTrip(t *testing
 		t.Fatal(err)
 	}
 	vault := &environmentVaultFake{values: map[string][]byte{}}
-	s, err := eb.NewService(one, &environmentRunnerFake{}, &environmentRegistryFake{}, vault, eb.Config{Enabled: true, BaseImage: "harbor.wellspiking.ai/public/base@sha256:" + strings.Repeat("0", 64), WorkspaceImage: "harbor.wellspiking.ai/public/debug@sha256:" + strings.Repeat("1", 64), EncryptionKey: []byte(strings.Repeat("k", 32)), GlobalConcurrency: 1, UserConcurrency: 1})
+	s, err := eb.NewService(one, &environmentRunnerFake{}, &environmentRegistryFake{}, vault, eb.Config{Enabled: true, BaseImage: "registry.example.com/public/base@sha256:" + strings.Repeat("0", 64), WorkspaceImage: "registry.example.com/public/debug@sha256:" + strings.Repeat("1", 64), EncryptionKey: []byte(strings.Repeat("k", 32)), GlobalConcurrency: 1, UserConcurrency: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestEnvironmentBuildPostgresRegistrationRollsBackAndRetainsPublishedDigest(
 	owner := environmentOwner()
 	ensurePostgresArtifactPrincipal(t, repo, ctx, auth.Principal{Subject: owner.UserID, Username: owner.UserID, TenantID: owner.TenantID, Roles: []string{"Engineer"}})
 	digest := "sha256:" + strings.Repeat("3", 64)
-	b := eb.Build{ID: "env-finalize", TenantID: owner.TenantID, OwnerID: owner.UserID, WorkspaceID: "workspace-a", Namespace: "tenant-a", WorkspaceResourceName: "ws", WorkspaceUID: "uid", BaseImage: "harbor.wellspiking.ai/public/base@" + digest, WorkspaceImage: "harbor.wellspiking.ai/public/debug@" + digest, Name: "Environment", Visibility: "personal", Project: "public", Repository: "test-env", Tag: "env-finalize", Status: eb.VerifyingPull, IdempotencyKey: "finalize-request", ImageDigest: digest, ImageReference: "harbor.wellspiking.ai/public/test-env@" + digest, Attempt: 1, ArtifactExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}
+	b := eb.Build{ID: "env-finalize", TenantID: owner.TenantID, OwnerID: owner.UserID, WorkspaceID: "workspace-a", Namespace: "tenant-a", WorkspaceResourceName: "ws", WorkspaceUID: "uid", BaseImage: "registry.example.com/public/base@" + digest, WorkspaceImage: "registry.example.com/public/debug@" + digest, Name: "Environment", Visibility: "personal", Project: "public", Repository: "test-env", Tag: "env-finalize", Status: eb.VerifyingPull, IdempotencyKey: "finalize-request", ImageDigest: digest, ImageReference: "registry.example.com/public/test-env@" + digest, Attempt: 1, ArtifactExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}
 	if _, err := repo.CreateEnvironmentBuild(ctx, b); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestEnvironmentBuildPostgresOrphanMaterialReclaimedWithoutSecretList(t *tes
 	repo := NewGormRepository(a.db)
 	ctx := context.Background()
 	vault := &environmentVaultFake{values: map[string][]byte{}, failDelete: true}
-	service, err := eb.NewService(repo, &environmentRunnerFake{}, &environmentRegistryFake{}, vault, eb.Config{Enabled: true, BaseImage: "harbor.wellspiking.ai/public/base@sha256:" + strings.Repeat("0", 64), WorkspaceImage: "harbor.wellspiking.ai/public/debug@sha256:" + strings.Repeat("1", 64), EncryptionKey: []byte(strings.Repeat("k", 32))})
+	service, err := eb.NewService(repo, &environmentRunnerFake{}, &environmentRegistryFake{}, vault, eb.Config{Enabled: true, BaseImage: "registry.example.com/public/base@sha256:" + strings.Repeat("0", 64), WorkspaceImage: "registry.example.com/public/debug@sha256:" + strings.Repeat("1", 64), EncryptionKey: []byte(strings.Repeat("k", 32))})
 	if err != nil {
 		t.Fatal(err)
 	}

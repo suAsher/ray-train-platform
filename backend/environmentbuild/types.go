@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const RegistryHost = "harbor.wellspiking.ai"
+const RegistryHost = "registry.example.com"
 const (
 	Queued          = "QUEUED"
 	Capturing       = "CAPTURING"
@@ -48,7 +48,7 @@ func (Credentials) GoString() string { return "[Harbor credentials redacted]" }
 
 type Authorization struct {
 	ID           string    `json:"id" gorm:"primaryKey"`
-	RegistryHost string    `json:"registryHost" gorm:"not null;default:harbor.wellspiking.ai"`
+	RegistryHost string    `json:"registryHost" gorm:"not null;default:registry.example.com"`
 	TenantID     string    `json:"-"`
 	OwnerID      string    `json:"-"`
 	Username     string    `json:"username"`
@@ -83,7 +83,7 @@ func (CredentialMaterial) TableName() string { return "environment_credential_ma
 
 type Build struct {
 	ID                    string     `json:"id" gorm:"primaryKey"`
-	RegistryHost          string     `json:"registryHost" gorm:"not null;default:harbor.wellspiking.ai"`
+	RegistryHost          string     `json:"registryHost" gorm:"not null;default:registry.example.com"`
 	TenantID              string     `json:"-"`
 	OwnerID               string     `json:"-"`
 	WorkspaceID           string     `json:"workspaceId"`

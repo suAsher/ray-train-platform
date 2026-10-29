@@ -91,7 +91,7 @@ func TestObserveCountsEligibleIdleGPUAfterLabelsTaintsAndPodRequests(t *testing.
 
 func TestObserveExcludesDedicatedTenantNodesEvenWhenAllowlisted(t *testing.T) {
 	adapter := testAdapter(crdWithSuspend(),
-		readyNode("node-a", map[string]string{"accelerator": "nvidia-rtx-4090", "platform.wellspiking.ai/dedicated-tenant": "tenant-a"}, 8),
+		readyNode("node-a", map[string]string{"accelerator": "nvidia-rtx-4090", "raytrain.io/dedicated-tenant": "tenant-a"}, 8),
 		readyNode("node-b", map[string]string{"accelerator": "nvidia-rtx-4090"}, 1),
 	)
 

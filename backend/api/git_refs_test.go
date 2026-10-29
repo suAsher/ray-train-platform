@@ -49,12 +49,12 @@ func decodeResolvedRef(t *testing.T, body []byte) GitResolvedRef {
 func TestResolveGitRefTurnsABranchIntoAPinnedCommit(t *testing.T) {
 	resolver := &fakeGitRefResolver{result: GitResolvedRef{Ref: "bev_3dod", RefType: "branch", Commit: "0c1dc9d1f2e3a4b5c6d7e8f90a1b2c3d4e5f6071"}}
 	handler := NewHandler(&fakeJobRepository{}, Options{
-		GitAllowlist: []string{"gitlab.qomolo.com"}, GitRefResolver: resolver,
+		GitAllowlist: []string{"git.example.com"}, GitRefResolver: resolver,
 		GitCredentials: &fakeGitCredentialStore{}, Kubernetes: k8s.NewClientFromInterfaces(nil, k8sfake.NewSimpleClientset()),
 	})
 	router := gitCredentialRouter(handler, auth.Principal{Subject: "user-a", TenantID: "team-a", Roles: []string{domain.RoleEngineer}})
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/git/resolve-ref", strings.NewReader(`{"repositoryUrl":"https://gitlab.qomolo.com/dl/bevfusion.git","ref":"bev_3dod"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/git/resolve-ref", strings.NewReader(`{"repositoryUrl":"https://git.example.com/dl/bevfusion.git","ref":"bev_3dod"}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -66,7 +66,7 @@ func TestResolveGitRefTurnsABranchIntoAPinnedCommit(t *testing.T) {
 	if resolved.Commit != "0c1dc9d1f2e3a4b5c6d7e8f90a1b2c3d4e5f6071" || resolved.RefType != "branch" {
 		t.Fatalf("expected a pinned branch commit, got %+v", resolved)
 	}
-	if resolver.repositoryURL != "https://gitlab.qomolo.com/dl/bevfusion.git" {
+	if resolver.repositoryURL != "https://git.example.com/dl/bevfusion.git" {
 		t.Fatalf("expected the requested repository, got %q", resolver.repositoryURL)
 	}
 }
@@ -77,7 +77,7 @@ func TestResolveGitRefTurnsABranchIntoAPinnedCommit(t *testing.T) {
 func TestResolveGitRefRejectsAHostOutsideTheAllowlist(t *testing.T) {
 	resolver := &fakeGitRefResolver{}
 	handler := NewHandler(&fakeJobRepository{}, Options{
-		GitAllowlist: []string{"gitlab.qomolo.com"}, GitRefResolver: resolver,
+		GitAllowlist: []string{"git.example.com"}, GitRefResolver: resolver,
 		GitCredentials: &fakeGitCredentialStore{}, Kubernetes: k8s.NewClientFromInterfaces(nil, k8sfake.NewSimpleClientset()),
 	})
 	router := gitCredentialRouter(handler, auth.Principal{Subject: "user-a", TenantID: "team-a", Roles: []string{domain.RoleEngineer}})
@@ -104,15 +104,15 @@ func TestResolveGitRefUsesTheCallersPersonalCredential(t *testing.T) {
 	}
 	store := &fakeGitCredentialStore{credentials: []domain.GitCredential{{
 		ID: "credential-1", TenantID: "team-a", Scope: domain.GitCredentialScopePersonal, OwnerUserID: "user-a",
-		Name: "内网 GitLab", Host: "gitlab.qomolo.com", Username: "alice", SecretName: "git-cred-secret", CreatedBy: "user-a",
+		Name: "内网 GitLab", Host: "git.example.com", Username: "alice", SecretName: "git-cred-secret", CreatedBy: "user-a",
 	}}}
 	resolver := &fakeGitRefResolver{result: GitResolvedRef{Ref: "bev_3dod_s1h", RefType: "branch", Commit: "7931ceeabcdef0123456789abcdef0123456789a"}}
 	handler := NewHandler(&fakeJobRepository{}, Options{
-		GitAllowlist: []string{"gitlab.qomolo.com"}, GitRefResolver: resolver, GitCredentials: store, Kubernetes: client,
+		GitAllowlist: []string{"git.example.com"}, GitRefResolver: resolver, GitCredentials: store, Kubernetes: client,
 	})
 	router := gitCredentialRouter(handler, auth.Principal{Subject: "user-a", TenantID: "team-a", Roles: []string{domain.RoleEngineer}})
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/git/resolve-ref", strings.NewReader(`{"repositoryUrl":"https://gitlab.qomolo.com/dl/bevfusion.git","ref":"bev_3dod_s1h"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/git/resolve-ref", strings.NewReader(`{"repositoryUrl":"https://git.example.com/dl/bevfusion.git","ref":"bev_3dod_s1h"}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -131,12 +131,12 @@ func TestResolveGitRefUsesTheCallersPersonalCredential(t *testing.T) {
 func TestResolveGitRefReportsAnUnknownBranchAsNotFound(t *testing.T) {
 	resolver := &fakeGitRefResolver{err: ErrGitRefNotFound}
 	handler := NewHandler(&fakeJobRepository{}, Options{
-		GitAllowlist: []string{"gitlab.qomolo.com"}, GitRefResolver: resolver,
+		GitAllowlist: []string{"git.example.com"}, GitRefResolver: resolver,
 		GitCredentials: &fakeGitCredentialStore{}, Kubernetes: k8s.NewClientFromInterfaces(nil, k8sfake.NewSimpleClientset()),
 	})
 	router := gitCredentialRouter(handler, auth.Principal{Subject: "user-a", TenantID: "team-a", Roles: []string{domain.RoleEngineer}})
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/git/resolve-ref", strings.NewReader(`{"repositoryUrl":"https://gitlab.qomolo.com/dl/bevfusion.git","ref":"no-such-branch"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/git/resolve-ref", strings.NewReader(`{"repositoryUrl":"https://git.example.com/dl/bevfusion.git","ref":"no-such-branch"}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -150,12 +150,12 @@ func TestResolveGitRefReportsAnUnknownBranchAsNotFound(t *testing.T) {
 func TestResolveGitRefAcceptsAnAlreadyPinnedCommitWithoutContactingTheHost(t *testing.T) {
 	resolver := &fakeGitRefResolver{}
 	handler := NewHandler(&fakeJobRepository{}, Options{
-		GitAllowlist: []string{"gitlab.qomolo.com"}, GitRefResolver: resolver,
+		GitAllowlist: []string{"git.example.com"}, GitRefResolver: resolver,
 		GitCredentials: &fakeGitCredentialStore{}, Kubernetes: k8s.NewClientFromInterfaces(nil, k8sfake.NewSimpleClientset()),
 	})
 	router := gitCredentialRouter(handler, auth.Principal{Subject: "user-a", TenantID: "team-a", Roles: []string{domain.RoleEngineer}})
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/git/resolve-ref", strings.NewReader(`{"repositoryUrl":"https://gitlab.qomolo.com/dl/bevfusion.git","ref":"0c1dc9d1f2e3a4b5c6d7e8f90a1b2c3d4e5f6071"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/git/resolve-ref", strings.NewReader(`{"repositoryUrl":"https://git.example.com/dl/bevfusion.git","ref":"0c1dc9d1f2e3a4b5c6d7e8f90a1b2c3d4e5f6071"}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)

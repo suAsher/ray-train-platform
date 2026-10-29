@@ -66,7 +66,7 @@ export function entrypointWarnings(entrypoint, workers, gpus) {
     return warnings
   }
   if (/torchpack\s+dist-run/.test(text)) {
-    warnings.push('torchpack dist-run 使用 MPI 启动，与平台的 torchrun 不兼容。请改用 tools/westwell_train.py --launcher pytorch。')
+    warnings.push('torchpack dist-run 使用 MPI 启动，与平台的 torchrun 不兼容。请改用 tools/train.py --launcher pytorch。')
     return warnings
   }
   if (shellOperators.some((operator) => text.includes(operator))) {

@@ -23,7 +23,7 @@ import (
 
 func workspacePlacementNode(name string) *corev1.Node {
 	return &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"accelerator": "nvidia-rtx-4090", "platform.wellspiking.ai/cache-ready": "true", "kubernetes.io/hostname": name}},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"accelerator": "nvidia-rtx-4090", "raytrain.io/cache-ready": "true", "kubernetes.io/hostname": name}},
 		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}, Allocatable: corev1.ResourceList{
 			"nvidia.com/gpu": resource.MustParse("8"), corev1.ResourceCPU: resource.MustParse("64"), corev1.ResourceMemory: resource.MustParse("512Gi"),
 		}},

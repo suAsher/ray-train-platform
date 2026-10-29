@@ -144,7 +144,7 @@
         </el-form-item>
         <el-form-item label="框架标注"><el-input v-model="newImage.framework" placeholder="可选，例如 PyTorch / BEVFusion" /></el-form-item>
         <p class="mb-3 text-xs text-amber-300">环境信息是管理员声明，未经平台自动验证；请填写实际版本和检查结果，不要填写仓库密码或令牌。</p>
-        <p class="mb-3 text-xs text-slate-400">支持 harbor.wellspiking.ai 或其他镜像仓库；私有仓库需由集群管理员配置网络、证书及镜像拉取凭据（不是 Git 凭据）。</p>
+        <p class="mb-3 text-xs text-slate-400">支持 registry.example.com 或其他镜像仓库；私有仓库需由集群管理员配置网络、证书及镜像拉取凭据（不是 Git 凭据）。</p>
         <el-form-item label="环境描述"><el-input v-model="newImage.description" type="textarea" :maxlength="2000" placeholder="环境用途、限制与兼容性" /></el-form-item>
         <el-form-item v-for="field in imageEnvironmentFields" :key="field.key" :label="field.label">
           <el-input v-model="newImage.environment[field.key]" :type="field.max > 128 ? 'textarea' : 'text'" :maxlength="field.max" placeholder="未提供；请按镜像实际环境填写" />
@@ -163,7 +163,7 @@
     <el-dialog v-model="showAddCredentialModal" title="添加团队私有仓库凭据" width="440px">
       <el-form label-position="top" @submit.prevent>
         <el-form-item label="名称"><el-input v-model="newCredential.name" placeholder="例如 内网 GitLab" /></el-form-item>
-        <el-form-item label="Git 主机"><el-input v-model="newCredential.host" placeholder="gitlab.qomolo.com（只填主机名）" /></el-form-item>
+        <el-form-item label="Git 主机"><el-input v-model="newCredential.host" placeholder="github.com（只填主机名）" /></el-form-item>
         <el-form-item label="用户名"><el-input v-model="newCredential.username" placeholder="留空则使用 git" /></el-form-item>
         <el-form-item label="访问令牌 / 密码">
           <el-input v-model="newCredential.token" type="password" show-password placeholder="Personal Access Token" />

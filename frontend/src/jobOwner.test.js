@@ -8,9 +8,9 @@ test('displays the signed-in user as me', () => {
 })
 
 test('resolves another submitter through the user directory', () => {
-  const users = new Map([['59778341-opaque-id', 'guofeng.su']])
+  const users = new Map([['59778341-opaque-id', 'example-user']])
 
-  assert.equal(displayJobOwner('59778341-opaque-id', 'admin-1', users), 'guofeng.su')
+  assert.equal(displayJobOwner('59778341-opaque-id', 'admin-1', users), 'example-user')
 })
 
 test('keeps an opaque owner identifier short when no directory entry exists', () => {

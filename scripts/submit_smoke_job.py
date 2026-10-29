@@ -6,7 +6,7 @@ Proves the full path: local login -> job submit -> Kueue admission -> RayJob
 so it works on any Ray image regardless of which ML framework is installed.
 
 Usage:
-    API_URL=http://172.28.0.167:31113 PLATFORM_PASSWORD=... \
+    API_URL=http://localhost:8080 PLATFORM_PASSWORD=... \
     IMAGE=registry/ray-test@sha256:<64hex> python3 scripts/submit_smoke_job.py
 """
 import json
@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.request
 
-API = os.environ.get("API_URL", "http://172.28.0.167:31113").rstrip("/")
+API = os.environ.get("API_URL", "http://localhost:8080").rstrip("/")
 USER = os.environ.get("PLATFORM_USER", "admin")
 PASSWORD = os.environ["PLATFORM_PASSWORD"]
 IMAGE = os.environ["IMAGE"]

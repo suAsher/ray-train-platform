@@ -6,7 +6,7 @@ export const environmentTopic = {
     '准备项目依赖清单、目标 GPU/训练模式，以及你有权推送的镜像仓库。Harbor 和其他地址均可；集群必须能访问该仓库。私有仓库的拉取凭据由管理员安全配置，不写入代码、镜像或提交说明。',
   ],
   blocks: [
-    { kind: 'note', text: '已发布基础镜像：harbor.wellspiking.ai/guofeng.su/raytrain-base:ray2.58.0-py310-torch2.4.1-cu121-20260906。实际 CPU 自检确认 Python 3.10.14、CUDA runtime 12.1、PyTorch 2.4.1、Ray 2.58.0、MLflow skinny 3.14.0、PyArrow 25.0.1。GPU 与多卡训练尚未验证，不是所有模型通用的已验收训练方案。' },
+    { kind: 'note', text: '示例镜像名称（需自行构建并登记）：registry.example.com/example-user/raytrain-base:ray2.58.0-py310-torch2.4.1-cu121-20260906。示例依赖组合为 Python 3.10.14、CUDA runtime 12.1、PyTorch 2.4.1、Ray 2.58.0、MLflow skinny 3.14.0、PyArrow 25.0.1。GPU 与多卡训练尚未验证，不是所有模型通用的已验收训练方案。' },
     { kind: 'table', headers: ['组件', '负责什么'], rows: [
       ['PyTorch', '模型、自动求导和优化器更新。'],
       ['Ray Train', '分布式训练编排；启动训练进程并通过适配后的代码接入指标、checkpoint 和恢复。不是替代 PyTorch。'],
@@ -36,7 +36,7 @@ WORKDIR /home/ray
     { kind: 'code', filename: '.dockerignore', label: '.dockerignore：只允许依赖清单进入构建上下文', text: '**\n!Dockerfile\n!requirements.txt\n!.dockerignore' },
     { kind: 'code', filename: 'requirements.txt', label: 'requirements.txt：只添加固定版本的额外依赖', text: '# 按项目填写 package==version；默认不增加依赖。\n# 不在这里覆盖平台 Ray、Torch、CUDA 或 Python 版本。\n# 无法满足约束时，请管理员提供兼容底座。\n' },
     { kind: 'code', label: '构建与推送（Bash；替换变量再执行）', lang: 'bash', text: `# 在仅含环境文件的目录运行；不要把项目根目录当构建上下文。
-BASE_IMAGE='harbor.wellspiking.ai/guofeng.su/raytrain-base:ray2.58.0-py310-torch2.4.1-cu121-20260906'
+BASE_IMAGE='registry.example.com/example-user/raytrain-base:ray2.58.0-py310-torch2.4.1-cu121-20260906'
 MY_IMAGE='registry.example.com/my-team/training-env:v1'
 # 先按仓库要求安全登录；不要在命令中写明文密码。
 docker buildx build --platform linux/amd64 --build-arg BASE_IMAGE="$BASE_IMAGE" -t "$MY_IMAGE" --load . &&
@@ -44,7 +44,7 @@ docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges -
 # CPU 自检不分配 GPU；前一步失败时不要继续。
 docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --entrypoint raytrain-selfcheck "$MY_IMAGE" &&
 docker push "$MY_IMAGE"` },
-    { kind: 'note', text: '允许 registry.example.com/team/env:v1，也允许 registry.example.com/team/env@sha256:摘要，不限 harbor.wellspiking.ai。当前平台不会自动把 tag 固定成 digest；tag 被覆盖后，新任务可能用到不同内容。建议使用不覆盖的版本 tag；严格复现使用 digest。运行后可请管理员核对 Pod imageID，不能将登记时的版本说明当作实际检测结果。' },
+    { kind: 'note', text: '允许 registry.example.com/team/env:v1，也允许 registry.example.com/team/env@sha256:摘要，不限 registry.example.com。当前平台不会自动把 tag 固定成 digest；tag 被覆盖后，新任务可能用到不同内容。建议使用不覆盖的版本 tag；严格复现使用 digest。运行后可请管理员核对 Pod imageID，不能将登记时的版本说明当作实际检测结果。' },
     { kind: 'warning', title: '环境可用不等于代码已适配', text: '普通 DDP DataLoader 与 Ray Data shard 的分片规则不同。使用 Ray Train 托管需要兼容训练入口；streaming 还需要匹配的数据 schema 和模型适配器。基础镜像包含平台组件，不承诺任意新模型无需改造即可使用全部功能。' },
   ],
   success: ['环境在本团队列表可见，版本与依赖描述符合实际；CPU 自检通过并保留结果。随后单卡验证能够导入依赖、读取样本、完成训练步骤并生成持久化产物；多卡与恢复须另行验证。'],

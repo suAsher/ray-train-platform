@@ -10,7 +10,7 @@ func TestClientHostPreservesLegacyDefault(t *testing.T) {
 	if NewClient().Host() != Host || (&Client{}).Host() != Host {
 		t.Fatal("legacy client no longer selects Wellspiking")
 	}
-	for _, host := range []string{Host, QomoloHost} {
+	for _, host := range []string{Host, SecondaryHost} {
 		client, err := NewClientForHost(host)
 		if err != nil || client.Host() != host {
 			t.Fatalf("selected registry not retained: %v", err)
@@ -19,9 +19,9 @@ func TestClientHostPreservesLegacyDefault(t *testing.T) {
 }
 
 func TestSelectedTransportRejectsOtherRegistryAndHostOverrides(t *testing.T) {
-	for _, host := range []string{Host, QomoloHost} {
-		other := QomoloHost
-		if host == QomoloHost {
+	for _, host := range []string{Host, SecondaryHost} {
+		other := SecondaryHost
+		if host == SecondaryHost {
 			other = Host
 		}
 		for _, target := range []string{
@@ -47,9 +47,9 @@ func TestSelectedTransportRejectsOtherRegistryAndHostOverrides(t *testing.T) {
 }
 
 func TestSelectedTransportBindsChallengesAndLocationsToRegistryAndRepository(t *testing.T) {
-	for _, host := range []string{Host, QomoloHost} {
-		other := QomoloHost
-		if host == QomoloHost {
+	for _, host := range []string{Host, SecondaryHost} {
+		other := SecondaryHost
+		if host == SecondaryHost {
 			other = Host
 		}
 		for _, tc := range []struct {

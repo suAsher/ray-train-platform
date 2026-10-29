@@ -25,7 +25,7 @@ spec:
     - name: oldAnnotations
       expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
     - name: ownedAnnotations
-      expression: "['platform.wellspiking.ai/onboarding-state', 'platform.wellspiking.ai/onboarding-reason']"
+      expression: "['raytrain.io/onboarding-state', 'raytrain.io/onboarding-reason']"
   validations:
     - expression: "object.spec == oldObject.spec && object.?status == oldObject.?status"
       message: "Onboarding may not change Node spec, cordon, taints or status"
@@ -39,12 +39,12 @@ spec:
         object.metadata.?deletionGracePeriodSeconds == oldObject.metadata.?deletionGracePeriodSeconds
       message: "Node identity, ownership and deletion metadata must remain unchanged"
     - expression: >-
-        variables.labels.all(k, k == 'platform.wellspiking.ai/cache-ready' ||
+        variables.labels.all(k, k == 'raytrain.io/cache-ready' ||
           (k in variables.oldLabels && variables.labels[k] == variables.oldLabels[k])) &&
-        variables.oldLabels.all(k, k == 'platform.wellspiking.ai/cache-ready' ||
+        variables.oldLabels.all(k, k == 'raytrain.io/cache-ready' ||
           (k in variables.labels && variables.labels[k] == variables.oldLabels[k])) &&
-        (!('platform.wellspiking.ai/cache-ready' in variables.labels) ||
-          variables.labels['platform.wellspiking.ai/cache-ready'] == 'true')
+        (!('raytrain.io/cache-ready' in variables.labels) ||
+          variables.labels['raytrain.io/cache-ready'] == 'true')
       message: "Only the cache-ready=true label may be added or removed"
     - expression: >-
         variables.annotations.all(k, k in variables.ownedAnnotations ||

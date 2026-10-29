@@ -59,7 +59,7 @@ const routes = [
         path: 'datacache',
         name: 'DataCache',
         component: () => import('../views/DataCache/index.vue'),
-        meta: { title: '数据集与模型产物 (TOS)', requiresAuth: true }
+        meta: { title: '数据与存储', requiresAuth: true }
       },
       {
         path: 'datasets',

@@ -51,12 +51,12 @@ spec:
         (!has(object.spec.tolerations) || object.spec.tolerations.all(t,
           (t.key in ['node.kubernetes.io/not-ready', 'node.kubernetes.io/unreachable'] &&
            t.operator == 'Exists' && t.effect == 'NoExecute' && t.tolerationSeconds <= 300) ||
-          (!variables.prep && t.key == 'platform.wellspiking.ai/dedicated-tenant' &&
+          (!variables.prep && t.key == 'raytrain.io/dedicated-tenant' &&
            t.operator == 'Equal' && t.effect == 'NoSchedule' && !has(t.tolerationSeconds) &&
            object.metadata.ownerReferences[0].name in variables.dedicatedNodeTenants &&
            t.value == variables.dedicatedNodeTenants[object.metadata.ownerReferences[0].name]))) &&
         (!has(object.spec.tolerations) || object.spec.tolerations.filter(t,
-          t.key == 'platform.wellspiking.ai/dedicated-tenant').size() <= 1)
+          t.key == 'raytrain.io/dedicated-tenant').size() <= 1)
       message: "Probes must be tokenless, bounded, isolated Pods with no extra containers or host namespaces"
     - expression: >-
         object.spec.securityContext.runAsUser == variables.uid &&

@@ -37,7 +37,7 @@ func TestMergePreservesConfigAndIsIdempotent(t *testing.T) {
 	if err != nil || !bytes.Equal(output, again) {
 		t.Fatalf("not idempotent: %s, %v", again, err)
 	}
-	if CacheReadyLabel != "platform.wellspiking.ai/cache-ready" {
+	if CacheReadyLabel != "raytrain.io/cache-ready" {
 		t.Fatal(CacheReadyLabel)
 	}
 }

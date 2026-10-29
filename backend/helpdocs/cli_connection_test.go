@@ -15,13 +15,13 @@ func TestCLIHelpExplainsCanonicalServerAndLocalVersion(t *testing.T) {
 		bodies[document.ID] = document.Markdown
 	}
 	for _, marker := range []string{
-		"https://raytrain.wellspiking.ai",
-		"spiking.wellspiking.ai",
+		"https://raytrain.example.com",
+		"raytrain.example.com",
 		"--help 来自本机",
 		"type -a spk-rayjob",
 		"hash -r",
 		"Get-Command spk-rayjob -All",
-		"spk-rayjob upgrade --server 'https://raytrain.wellspiking.ai'",
+		"spk-rayjob upgrade --server 'https://raytrain.example.com'",
 		"--token-stdin",
 	} {
 		if !strings.Contains(bodies["cli-onboarding-v2"], marker) {
@@ -36,7 +36,7 @@ func TestCLIHelpExplainsCanonicalServerAndLocalVersion(t *testing.T) {
 	}
 	for _, guide := range PublicGuides() {
 		if guide.ID == "quickstart" {
-			for _, marker := range []string{"--help 来自本机", "type -a spk-rayjob", "hash -r", "spiking.wellspiking.ai"} {
+			for _, marker := range []string{"--help 来自本机", "type -a spk-rayjob", "hash -r", "raytrain.example.com"} {
 				if !strings.Contains(guide.Markdown, marker) {
 					t.Errorf("public CLI quickstart missing %q", marker)
 				}

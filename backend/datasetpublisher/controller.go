@@ -250,7 +250,7 @@ func (spec PublicationJobSpec) Labels() map[string]string {
 		"app.kubernetes.io/managed-by":                 "ray-train-platform",
 		"app.kubernetes.io/name":                       "dataset-publisher",
 		"kueue.x-k8s.io/queue-name":                    spec.queueName,
-		"platform.wellspiking.ai/publication-job-name": spec.name,
+		"raytrain.io/publication-job-name": spec.name,
 	}
 }
 

@@ -11,7 +11,7 @@ func TestMLflowExternalArticlesExplainSDKAndRESTConnectionBoundaries(t *testing.
 	for _, id := range []string{"mlflow-api-with-pat", "mlflow-external-tracking"} {
 		article := ProjectHelpArticle(domain.HelpDocument{ID: id, Markdown: "seed", UpdatedBy: PlatformSeedActor})
 		for _, marker := range []string{
-			"https://raytrain.wellspiking.ai/api/v1/mlflow-native",
+			"https://raytrain.example.com/api/v1/mlflow-native",
 			"tracking_uri",
 			"/api/2.0/mlflow/...",
 			"SDK 会自行拼接",

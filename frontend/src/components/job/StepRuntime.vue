@@ -132,7 +132,7 @@
       <div class="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
         <button type="button" class="rounded-xl border p-3 text-left transition" :class="dataModeClass('mount')" @click="selectDataMode('mount')">
           <p class="text-sm font-semibold text-white">直接读取</p>
-          <p class="mt-1 text-xs leading-5 text-slate-400">从已授权的 TOS/IDC 挂载读取，启动最快；大量小文件可能受远端元数据延迟影响。</p>
+          <p class="mt-1 text-xs leading-5 text-slate-400">从已授权的 已登记存储 挂载读取，启动最快；大量小文件可能受远端元数据延迟影响。</p>
         </button>
         <button type="button" class="rounded-xl border p-3 text-left transition" :class="dataModeClass('cache')" :disabled="!runtimeCacheAvailable" @click="selectDataMode('cache')">
           <p class="text-sm font-semibold text-white">NVMe 预热</p>

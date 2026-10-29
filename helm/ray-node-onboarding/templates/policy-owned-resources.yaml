@@ -22,11 +22,11 @@ spec:
     - expression: >-
         request.namespace == 'ray-cache-local' &&
         has(variables.target.metadata.labels) &&
-        'platform.wellspiking.ai/onboarding-node-uid' in variables.target.metadata.labels &&
+        'raytrain.io/onboarding-node-uid' in variables.target.metadata.labels &&
         has(variables.target.metadata.ownerReferences) && size(variables.target.metadata.ownerReferences) == 1 &&
         variables.target.metadata.ownerReferences[0].apiVersion == 'v1' &&
         variables.target.metadata.ownerReferences[0].kind == 'Node' &&
-        variables.target.metadata.ownerReferences[0].uid == variables.target.metadata.labels['platform.wellspiking.ai/onboarding-node-uid'] &&
+        variables.target.metadata.ownerReferences[0].uid == variables.target.metadata.labels['raytrain.io/onboarding-node-uid'] &&
         variables.target.metadata.ownerReferences[0].uid.matches('^[a-f0-9-]{36}$') &&
         (request.resource.resource == 'pods'
           ? variables.target.metadata.name.matches('^onboard-[a-f0-9]{20}-(prepare|probe)$')
@@ -41,7 +41,7 @@ spec:
             object.metadata.annotations.all(k,
               k == 'vke.volcengine.com/cello-pod-evict-policy' && object.metadata.annotations[k] == 'allow'))) &&
          object.metadata.labels.all(k,
-           k in ['platform.wellspiking.ai/onboarding-node-uid', 'topology.kubernetes.io/region', 'topology.kubernetes.io/zone'] &&
+           k in ['raytrain.io/onboarding-node-uid', 'topology.kubernetes.io/region', 'topology.kubernetes.io/zone'] &&
            size(object.metadata.labels[k]) <= 63) &&
          (!has(object.metadata.ownerReferences[0].blockOwnerDeletion) || !object.metadata.ownerReferences[0].blockOwnerDeletion))
       message: "New probes allow only the owner UID and bounded standard region/zone labels, no foreign metadata"

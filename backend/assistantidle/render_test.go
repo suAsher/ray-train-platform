@@ -13,7 +13,7 @@ func validRenderConfig() RenderConfig {
 		Name:               "raytrain-assistant-idle",
 		Namespace:          "raytrain-assistant-system",
 		QueueName:          "assistant-idle-localqueue",
-		ServeImage:         "harbor.wellspiking.ai/assistant/assistant-serve@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ServeImage:         "registry.example.com/assistant/assistant-serve@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		ModelPVC:           "qwen3-8b-awq-cache",
 		ImagePullSecrets:   []string{"harbor-registry"},
 		GateURL:            "http://assistant-idle-controller.raytrain-assistant-system.svc.cluster.local:8080/gate",
@@ -21,8 +21,8 @@ func validRenderConfig() RenderConfig {
 		InstanceID:         "assistant-idle-acceptance",
 		ToleratedTaintKeys: []string{"nvidia.com/gpu"},
 		RequiredNodeLabels: map[string]string{
-			"platform.wellspiking.ai/gpu-pool":    "production",
-			"platform.wellspiking.ai/cache-ready": "true",
+			"raytrain.io/gpu-pool":    "production",
+			"raytrain.io/cache-ready": "true",
 			"accelerator":                         "nvidia-rtx-4090",
 		},
 	}
@@ -40,7 +40,7 @@ func renderForTest(t *testing.T, cfg RenderConfig) *unstructured.Unstructured {
 func TestRenderRayServiceValidatesImmutableInputs(t *testing.T) {
 	base := validRenderConfig()
 	for name, mutate := range map[string]func(*RenderConfig){
-		"missing digest":        func(c *RenderConfig) { c.ServeImage = "harbor.wellspiking.ai/assistant/assistant-serve:latest" },
+		"missing digest":        func(c *RenderConfig) { c.ServeImage = "registry.example.com/assistant/assistant-serve:latest" },
 		"missing model pvc":     func(c *RenderConfig) { c.ModelPVC = "" },
 		"unsafe pull secret":    func(c *RenderConfig) { c.ImagePullSecrets = []string{"harbor/registry"} },
 		"duplicate pull secret": func(c *RenderConfig) { c.ImagePullSecrets = []string{"harbor-registry", "harbor-registry"} },
@@ -57,9 +57,9 @@ func TestRenderRayServiceValidatesImmutableInputs(t *testing.T) {
 			}
 		},
 		"unsafe namespace":           func(c *RenderConfig) { c.Namespace = "raytrain_assistant" },
-		"dedicated taint toleration": func(c *RenderConfig) { c.ToleratedTaintKeys = []string{"platform.wellspiking.ai/dedicated-tenant"} },
+		"dedicated taint toleration": func(c *RenderConfig) { c.ToleratedTaintKeys = []string{"raytrain.io/dedicated-tenant"} },
 		"dedicated label selector": func(c *RenderConfig) {
-			c.RequiredNodeLabels = map[string]string{"platform.wellspiking.ai/dedicated-tenant": "tenant-a"}
+			c.RequiredNodeLabels = map[string]string{"raytrain.io/dedicated-tenant": "tenant-a"}
 		},
 		"model path outside model mount": func(c *RenderConfig) { c.ModelPath = "/tmp/model" },
 	} {
@@ -94,7 +94,7 @@ func TestRenderRayServiceUsesKueueSuspendedSingleGPUShape(t *testing.T) {
 		t.Fatalf("rayVersion=%q, want 2.58.0", rayVersion)
 	}
 	headLabels := asMap(t, at(t, obj.Object, "spec", "rayClusterConfig", "headGroupSpec", "template", "metadata", "labels"))
-	if fmt.Sprint(headLabels["raytrain.wellspiking.ai/assistant-role"]) != "head" {
+	if fmt.Sprint(headLabels["raytrain.io/assistant-role"]) != "head" {
 		t.Fatalf("head role label missing: %v", headLabels)
 	}
 
@@ -109,7 +109,7 @@ func TestRenderRayServiceUsesKueueSuspendedSingleGPUShape(t *testing.T) {
 	}
 	worker := asMap(t, workerGroups[0])
 	workerLabels := asMap(t, at(t, worker, "template", "metadata", "labels"))
-	if fmt.Sprint(workerLabels["raytrain.wellspiking.ai/assistant-role"]) != "worker" {
+	if fmt.Sprint(workerLabels["raytrain.io/assistant-role"]) != "worker" {
 		t.Fatalf("worker role label missing: %v", workerLabels)
 	}
 	if worker["minReplicas"] != int64(1) || worker["maxReplicas"] != int64(1) || worker["replicas"] != int64(1) {
@@ -222,10 +222,10 @@ func TestRenderRayServiceKeepsHeadCPUOnlyAndPinsHeadAwayFromDedicatedNodes(t *te
 	joined := compact(asSlice(t, at(t, asMap(t, terms[0]), "matchExpressions")))
 	for _, want := range []string{
 		"kubernetes.io/hostname", "shared-node-a",
-		"platform.wellspiking.ai/gpu-pool", "production",
-		"platform.wellspiking.ai/cache-ready", "true",
+		"raytrain.io/gpu-pool", "production",
+		"raytrain.io/cache-ready", "true",
 		"accelerator", "nvidia-rtx-4090",
-		"platform.wellspiking.ai/dedicated-tenant", "DoesNotExist",
+		"raytrain.io/dedicated-tenant", "DoesNotExist",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("head affinity missing %q in %s", want, joined)
@@ -249,10 +249,10 @@ func TestRenderRayServiceDefaultsHeadNodesToWorkerNodesAndPinsWorkerToAllowedNod
 		joined := compact(asSlice(t, at(t, asMap(t, terms[0]), "matchExpressions")))
 		for _, want := range []string{
 			"kubernetes.io/hostname", "gpu-node-a", "gpu-node-b",
-			"platform.wellspiking.ai/gpu-pool", "production",
-			"platform.wellspiking.ai/cache-ready", "true",
+			"raytrain.io/gpu-pool", "production",
+			"raytrain.io/cache-ready", "true",
 			"accelerator", "nvidia-rtx-4090",
-			"platform.wellspiking.ai/dedicated-tenant", "DoesNotExist",
+			"raytrain.io/dedicated-tenant", "DoesNotExist",
 		} {
 			if !strings.Contains(joined, want) {
 				t.Fatalf("%s affinity missing %q in %s", tc.name, want, joined)

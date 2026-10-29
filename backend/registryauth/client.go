@@ -17,9 +17,9 @@ import (
 	"unicode"
 )
 
-const Origin = "https://harbor.wellspiking.ai"
-const Host = "harbor.wellspiking.ai"
-const QomoloHost = "harbor.qomolo.com"
+const Origin = "https://registry.example.com"
+const Host = "registry.example.com"
+const SecondaryHost = "registry-secondary.example.com"
 const registryService = "harbor-registry"
 const maxResponseBytes = 2 << 20
 
@@ -67,17 +67,26 @@ func NewClient() *Client {
 	return client
 }
 
-// NormalizeHost accepts only canonical, configured registry hosts. An omitted
-// host preserves the historical Wellspiking destination; URLs are not hosts.
+// NormalizeHost validates canonical DNS syntax. The service layer additionally
+// checks its administrator-configured allowlist before accepting credentials.
 func NormalizeHost(host string) (string, error) {
-	switch host {
-	case "", Host:
+	if host == "" {
 		return Host, nil
-	case QomoloHost:
-		return QomoloHost, nil
-	default:
+	}
+	if len(host) > 253 || !strings.Contains(host, ".") || strings.ToLower(host) != host {
 		return "", ErrInvalidTarget
 	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", ErrInvalidTarget
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return "", ErrInvalidTarget
+			}
+		}
+	}
+	return host, nil
 }
 
 // NewClientForHost freezes the only HTTPS origin to which credentials and

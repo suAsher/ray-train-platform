@@ -15,6 +15,7 @@ import (
 )
 
 func TestHTTPDemandObserverRequiresFreshValidAuthenticatedTLSObservation(t *testing.T) {
+	t.Setenv("ASSISTANT_DEMAND_URL", "https://raytrain.example.com/api/v1/internal/assistant-idle/training-demand")
 	now := time.Now().UTC()
 	token := strings.Repeat("a", 64)
 	file := filepath.Join(t.TempDir(), "token")
@@ -61,6 +62,7 @@ func TestHTTPDemandObserverRequiresFreshValidAuthenticatedTLSObservation(t *test
 }
 
 func TestHTTPDemandObserverDisablesEnvironmentProxyButKeepsTLSAndRedirectPolicy(t *testing.T) {
+	t.Setenv("ASSISTANT_DEMAND_URL", "https://raytrain.example.com/api/v1/internal/assistant-idle/training-demand")
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:9")
 	token := strings.Repeat("b", 64)
 	file := filepath.Join(t.TempDir(), "token")
@@ -81,8 +83,17 @@ func TestHTTPDemandObserverDisablesEnvironmentProxyButKeepsTLSAndRedirectPolicy(
 	if transport.TLSClientConfig == nil || transport.TLSClientConfig.MinVersion != tls.VersionTLS12 {
 		t.Fatalf("assistant demand observer lost TLS policy: %+v", transport.TLSClientConfig)
 	}
-	request := httptest.NewRequest(http.MethodGet, "https://raytrain.wellspiking.ai/redirect", nil)
+	request := httptest.NewRequest(http.MethodGet, "https://raytrain.example.com/redirect", nil)
 	if err := observer.client.CheckRedirect(request, []*http.Request{request}); !errors.Is(err, http.ErrUseLastResponse) {
 		t.Fatalf("assistant demand observer redirect policy changed: %v", err)
+	}
+}
+
+func TestHTTPDemandObserverRejectsMissingOrUnsafeEndpoint(t *testing.T) {
+	for _, endpoint := range []string{"", "http://raytrain.example.com/api/v1/internal/assistant-idle/training-demand", "https://user:secret@raytrain.example.com/api/v1/internal/assistant-idle/training-demand", "https://raytrain.example.com/other"} {
+		t.Setenv("ASSISTANT_DEMAND_URL", endpoint)
+		if _, err := NewHTTPDemandObserver("unused", ""); err == nil || !strings.Contains(err.Error(), "ASSISTANT_DEMAND_URL") {
+			t.Fatalf("unsafe endpoint accepted: %q: %v", endpoint, err)
+		}
 	}
 }

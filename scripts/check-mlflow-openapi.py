@@ -44,7 +44,7 @@ def main():
     document = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
     validate_spec(document)
     assert document["openapi"] == "3.1.0"
-    assert document["servers"][0]["url"] == "https://raytrain.wellspiking.ai"
+    assert document["servers"][0]["url"] == "https://training.example.com"
     expected = {
         "/api/v1/experiments": "get",
         "/api/v1/jobs/{job_id}/experiment": "get",

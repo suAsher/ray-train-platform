@@ -1,5 +1,0 @@
-apiVersion: v2
-name: raytrain-platform-telemetry
-description: Exact backend telemetry identity and VictoriaMetrics discovery
-type: application
-version: 0.1.0

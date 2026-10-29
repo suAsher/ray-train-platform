@@ -1,3 +1,0 @@
-{{- if .Values.dashboard.enabled }}
-{{ .Files.Get "dashboard.yaml" }}
-{{- end }}

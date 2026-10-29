@@ -41,6 +41,22 @@ func NewService(store Store, runner Runner, registry Registry, vault Vault, conf
 		return nil, err
 	}
 	config.WorkspaceProfiles = profiles
+	if config.Enabled {
+		images := append([]string{config.BaseImage, config.WorkspaceImage}, compatibleImages...)
+		for _, profile := range profiles {
+			images = append(images, profile.WorkspaceImage, profile.BaseImage, profile.PrepareImage)
+		}
+		for _, image := range images {
+			host, _, ok := strings.Cut(image, "/")
+			allowed := false
+			for _, candidate := range hosts {
+				allowed = allowed || host == candidate
+			}
+			if !ok || !allowed || !pinnedProfileImage(image) {
+				return nil, ErrInvalid
+			}
+		}
+	}
 	if config.Enabled && (store == nil || runner == nil || registry == nil || vault == nil || len(config.EncryptionKey) != 32 || !strings.Contains(config.BaseImage, "@sha256:") || !strings.Contains(config.WorkspaceImage, "@sha256:")) {
 		return nil, ErrInvalid
 	}
@@ -65,7 +81,11 @@ func (s *Service) Capabilities() map[string]any {
 	if s == nil {
 		return map[string]any{"enabled": false}
 	}
-	return map[string]any{"enabled": s.Enabled(), "registryHost": RegistryHost, "registries": s.registryCapabilities(), "baseImage": s.config.BaseImage, "workspaceImage": s.config.WorkspaceImage, "supportedCaptureVersion": 1, "compatibleWorkspaceImages": append([]string(nil), s.config.CompatibleWorkspaceImages...), "workspaceProfiles": append([]WorkspaceProfile{}, s.config.WorkspaceProfiles...)}
+	host := RegistryHost
+	if len(s.config.RegistryHosts) > 0 {
+		host = s.config.RegistryHosts[0]
+	}
+	return map[string]any{"enabled": s.Enabled(), "registryHost": host, "registries": s.registryCapabilities(), "baseImage": s.config.BaseImage, "workspaceImage": s.config.WorkspaceImage, "supportedCaptureVersion": 1, "compatibleWorkspaceImages": append([]string(nil), s.config.CompatibleWorkspaceImages...), "workspaceProfiles": append([]WorkspaceProfile{}, s.config.WorkspaceProfiles...)}
 }
 
 type CreateRequest struct {
@@ -88,7 +108,7 @@ func normalizeCompatibleWorkspaceImages(primary string, images []string) ([]stri
 	seen := map[string]bool{primary: true}
 	for _, raw := range images {
 		image := strings.TrimSpace(raw)
-		if !compatibleWorkspaceSourcePattern.MatchString(image) || !strings.HasPrefix(image, RegistryHost+"/") {
+		if !pinnedProfileImage(image) {
 			return nil, ErrInvalid
 		}
 		if !seen[image] {

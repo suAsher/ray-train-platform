@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly chart_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly production_values="${chart_dir}/values-vke-production.yaml"
+readonly production_values="${chart_dir}/values-example-production.yaml"
 
 [[ -f "${chart_dir}/Chart.yaml" ]] || { echo 'missing ray-cache-local Chart.yaml' >&2; exit 1; }
 command -v helm >/dev/null || { echo 'missing command: helm' >&2; exit 1; }
@@ -49,14 +49,14 @@ require "${production_rendered}" 'reclaimPolicy: Delete'
 require "${production_rendered}" 'volumeBindingMode: WaitForFirstConsumer'
 require "${production_rendered}" 'allowVolumeExpansion: false'
 require "${production_rendered}" 'storageclass.kubernetes.io/is-default-class: "false"'
-require "${production_rendered}" '"node": "172.28.1.232"'
-require "${production_rendered}" '"node": "172.28.1.233"'
+require "${production_rendered}" '"node": "gpu-node-a"'
+require "${production_rendered}" '"node": "gpu-node-b"'
 require "${production_rendered}" '/data1/ray-cache'
 require "${production_rendered}" '/data2/ray-cache'
 require "${production_rendered}" '"node": "DEFAULT_PATH_FOR_NON_LISTED_NODES"'
 require "${production_rendered}" '"paths": []'
-require "${production_rendered}" 'harbor.wellspiking.ai/guofeng.su/local-path-provisioner@sha256:7d30aa9da00db4d40dbe3d2bb41a0fb6a3a926cbe915908458b0ec470db73115'
-require "${production_rendered}" 'harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4'
+require "${production_rendered}" 'docker.io/rancher/local-path-provisioner:v0.0.32'
+require "${production_rendered}" 'docker.io/library/busybox:1.36.1'
 require "${production_rendered}" '--configmap-name'
 require "${production_rendered}" 'ray-cache-local-config'
 require "${production_rendered}" '--helper-pod-file'
@@ -67,12 +67,12 @@ require "${production_rendered}" '--provisioner-name'
 require "${production_rendered}" 'rancher.io/local-path'
 
 # Portable defaults must not know any production node identity.
-reject "${default_rendered}" '172.28.1.232'
-reject "${default_rendered}" '172.28.1.233'
+reject "${default_rendered}" 'gpu-node-a'
+reject "${default_rendered}" 'gpu-node-b'
 
 # Production path maps are an exact allowlist: two GPU nodes plus the deny-all default.
 map_nodes="$(grep -F '"node":' "${production_rendered}" | sed -E 's/^.*"node": "([^"]+)".*$/\1/' | sort -u)"
-expected_nodes=$'172.28.1.232\n172.28.1.233\nDEFAULT_PATH_FOR_NON_LISTED_NODES'
+expected_nodes=$'gpu-node-a\ngpu-node-b\nDEFAULT_PATH_FOR_NON_LISTED_NODES'
 [[ "${map_nodes}" == "${expected_nodes}" ]] || {
   echo "unexpected nodePathMap nodes:" >&2
   printf '%s\n' "${map_nodes}" >&2
@@ -100,7 +100,7 @@ require "${production_rendered}" 'resources: ["pods/log"]'
 # fields that safe-mode validation rejects.
 require "${helper_pod_rendered}" 'kind: Pod'
 require "${helper_pod_rendered}" 'name: helper-pod'
-require "${helper_pod_rendered}" 'harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4'
+require "${helper_pod_rendered}" 'docker.io/library/busybox:1.36.1'
 [[ "$(grep -Ec '^[[:space:]]{4}- name:' "${helper_pod_rendered}")" -eq 1 ]] || {
   echo 'helperPod.yaml must contain exactly one container' >&2
   exit 1

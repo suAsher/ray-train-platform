@@ -10,7 +10,7 @@ const mlflowAnonymousConnectionGuide = `当前原生 MLflow API 已开放免令�
 
 当前验证的客户端为 mlflow==3.14.0。先在本地电脑或调用服务的环境安装客户端，不要在无外网的训练节点临时下载安装。
 
-- Python SDK 的 tracking_uri 只填 https://raytrain.wellspiking.ai/api/v1/mlflow-native，SDK 会自行拼接 /api/2.0/mlflow/...；不要把 REST 后缀加到 tracking_uri。
+- Python SDK 的 tracking_uri 只填 https://raytrain.example.com/api/v1/mlflow-native，SDK 会自行拼接 /api/2.0/mlflow/...；不要把 REST 后缀加到 tracking_uri。
 - HTTP 请求在此前缀后追加原生 REST 路径。文件读写使用 SDK 的 log_artifact / download_artifacts，避免猜测存储路由。
 - 平台内训练沿用已注入 MLFLOW_TRACKING_URI，不要覆盖为外部原生入口；无需个人 PAT，保留平台 Job 来源关联。
 - MLflow 网页 /mlflow/ 仍需要从已登录的平台打开。MLFLOW_DASHBOARD_AUTH_REQUIRED 表示误用了网页路径，不表示 Token 过期。
@@ -49,11 +49,11 @@ func projectMLflowNativeAccess(document domain.HelpDocument, publicEnabled bool)
 	return document
 }
 
-const mlflowAnonymousWebGuide = `MLflow 网页已开放匿名访问，无需登录、Cookie 或先从平台跳转。可直接打开 [MLflow 网页](https://raytrain.wellspiking.ai/mlflow/)，进入目标 Run 后复制并分享浏览器完整地址，格式为 https://raytrain.wellspiking.ai/mlflow/#/experiments/EXPERIMENT_ID/runs/RUN_ID。接收者须能访问该域名；原有“打开 MLflow”按钮仍可使用，分享时使用跳转完成后不含 access_token 的地址。
+const mlflowAnonymousWebGuide = `MLflow 网页已开放匿名访问，无需登录、Cookie 或先从平台跳转。可直接打开 [MLflow 网页](https://raytrain.example.com/mlflow/)，进入目标 Run 后复制并分享浏览器完整地址，格式为 https://raytrain.example.com/mlflow/#/experiments/EXPERIMENT_ID/runs/RUN_ID。接收者须能访问该域名；原有“打开 MLflow”按钮仍可使用，分享时使用跳转完成后不含 access_token 的地址。
 
 该网页面向现有网络可达范围共享全部实验、Run、Artifact 和 Registry，允许读取、创建、修改和删除；操作会影响所有使用这些内容的人。平台任务、个人目录、数据空间和调度接口仍需原有认证。网页不会自动生成训练指标或改变训练接入方式。
 
-程序调用继续使用 https://raytrain.wellspiking.ai/api/v1/mlflow-native，认证方式按本页 API 说明；不要把带 # 的网页地址设为 tracking_uri。`
+程序调用继续使用 https://raytrain.example.com/api/v1/mlflow-native，认证方式按本页 API 说明；不要把带 # 的网页地址设为 tracking_uri。`
 
 func projectMLflowDashboardAccess(document domain.HelpDocument, publicEnabled bool) domain.HelpDocument {
 	if !publicEnabled || document.UpdatedBy != PlatformSeedActor {
@@ -69,11 +69,11 @@ func projectMLflowDashboardAccess(document domain.HelpDocument, publicEnabled bo
 		"通过浏览器会话查看共享实验、Run、Artifact 和 Registry",
 		"直接打开或分享 Run 直链，查看共享实验、Run、Artifact 和 Registry",
 		"浏览器票据和原生程序 API 是两种通道，重新从任务详情进入",
-		"直接打开 https://raytrain.wellspiking.ai/mlflow/；核对域名连通性、Experiment ID / Run ID 和浏览器错误，无需先从平台跳转",
+		"直接打开 https://raytrain.example.com/mlflow/；核对域名连通性、Experiment ID / Run ID 和浏览器错误，无需先从平台跳转",
 		"网页路径返回 MLFLOW_DASHBOARD_AUTH_REQUIRED 不表示 PAT 过期",
 		"网页已开放匿名访问；若仍返回 MLFLOW_DASHBOARD_AUTH_REQUIRED，请核对入口和部署配置，不表示 PAT 过期",
-		"从任务详情或实验中心点击「MLflow 详情 / 打开该 Run」，不要把 API 的 PAT 填入浏览器地址。平台先签发一次性票据，再在 `https://raytrain.wellspiking.ai` 的受保护路径换成 HttpOnly Cookie；地址栏不应保留 `access_token`，中间地址不可分享。",
-		"MLflow 网页和 Run 直链无需登录或平台跳转。直接打开 https://raytrain.wellspiking.ai/mlflow/，进入 Run 后分享含 #/experiments/.../runs/... 的完整地址。平台原有打开按钮仍可使用；不要分享含 access_token 的中间跳转地址。直链无法打开时检查域名连通性、Experiment ID / Run ID 和浏览器错误，不要通过重提训练解决。",
+		"从任务详情或实验中心点击「MLflow 详情 / 打开该 Run」，不要把 API 的 PAT 填入浏览器地址。平台先签发一次性票据，再在 `https://raytrain.example.com` 的受保护路径换成 HttpOnly Cookie；地址栏不应保留 `access_token`，中间地址不可分享。",
+		"MLflow 网页和 Run 直链无需登录或平台跳转。直接打开 https://raytrain.example.com/mlflow/，进入 Run 后分享含 #/experiments/.../runs/... 的完整地址。平台原有打开按钮仍可使用；不要分享含 access_token 的中间跳转地址。直链无法打开时检查域名连通性、Experiment ID / Run ID 和浏览器错误，不要通过重提训练解决。",
 	).Replace(document.Markdown)
 	switch document.ID {
 	case "mlflow", "mlflow-api-with-pat", "mlflow-external-tracking", queueAndToolArticleID:

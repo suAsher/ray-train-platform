@@ -42,7 +42,7 @@ func (r *environmentCapsRunner) InspectWorkspace(context.Context, eb.Workspace) 
 	return eb.WorkspaceSnapshot{UID: "pod-uid", Image: r.image}, r.err
 }
 func TestEnvironmentCapabilitiesHintUsesAuthenticatedOwnerAndKeepsCapsAvailable(t *testing.T) {
-	image := "harbor.wellspiking.ai/public/cu126-debug@sha256:" + strings.Repeat("5", 64)
+	image := "registry.example.com/public/cu126-debug@sha256:" + strings.Repeat("5", 64)
 	for _, name := range []string{"owned-profile", "no-current", "foreign-current", "inspect-error", "PAT", "missing-owner", "integration"} {
 		t.Run(name, func(t *testing.T) {
 			store := &environmentCapsStore{environmentAPIStore: &environmentAPIStore{}, current: &domain.DevWorkspace{ID: "own-workspace", TenantID: "team", UserID: "stable-owner", Namespace: "tenant", RayClusterName: "cluster", State: domain.WorkspaceRunning}}
@@ -62,9 +62,9 @@ func TestEnvironmentCapabilitiesHintUsesAuthenticatedOwnerAndKeepsCapsAvailable(
 			case "integration":
 				p.IntegrationID = "integration"
 			}
-			primary := "harbor.wellspiking.ai/public/default-debug@sha256:" + strings.Repeat("2", 64)
-			base := "harbor.wellspiking.ai/public/default-base@sha256:" + strings.Repeat("1", 64)
-			service, err := eb.NewService(store, runner, &environmentAPIRegistry{}, &environmentAPIVault{}, eb.Config{Enabled: true, BaseImage: base, WorkspaceImage: primary, WorkspaceProfiles: []eb.WorkspaceProfile{{WorkspaceImage: image, BaseImage: "harbor.wellspiking.ai/public/cu126-base@sha256:" + strings.Repeat("6", 64), PrepareImage: "harbor.wellspiking.ai/public/cu126-prepare@sha256:" + strings.Repeat("7", 64)}}, EncryptionKey: []byte(strings.Repeat("k", 32))})
+			primary := "registry.example.com/public/default-debug@sha256:" + strings.Repeat("2", 64)
+			base := "registry.example.com/public/default-base@sha256:" + strings.Repeat("1", 64)
+			service, err := eb.NewService(store, runner, &environmentAPIRegistry{}, &environmentAPIVault{}, eb.Config{Enabled: true, BaseImage: base, WorkspaceImage: primary, WorkspaceProfiles: []eb.WorkspaceProfile{{WorkspaceImage: image, BaseImage: "registry.example.com/public/cu126-base@sha256:" + strings.Repeat("6", 64), PrepareImage: "registry.example.com/public/cu126-prepare@sha256:" + strings.Repeat("7", 64)}}, EncryptionKey: []byte(strings.Repeat("k", 32))})
 			if err != nil {
 				t.Fatal(err)
 			}

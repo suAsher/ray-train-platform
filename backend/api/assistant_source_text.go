@@ -15,7 +15,7 @@ func assistantSafeSourceURL(raw string) bool {
 		return false
 	}
 	switch u.Host {
-	case "raytrain.wellspiking.ai", "spiking.wellspiking.ai", "spiking-dev.wellspiking.ai":
+	case "raytrain.example.com", "raytrain-dev.example.com":
 		return true
 	default:
 		return false

@@ -17,7 +17,7 @@ python -m pip check
 
 安装完成后先调试，再使用平台“保存为训练环境”。保存期间不要同时安装/卸载包；如果捕获检测到变化会失败并要求重试。依赖目前保留在本次调试 Pod 的可写层，**停止/重建调试环境前应保存版本**，工作区文件快照不包含此 venv。
 
-新调试镜像的 `/etc/pip.conf` 和默认安装源使用 `https://mirrors.ivolces.com/pypi/simple/`。这只作用于本次新增镜像，不修改原 Base、现有调试环境或节点宿主机的 pip、APT、Docker 配置。离线 wheel 可以用于调试安装，但保存时仍需从固定源取得内容一致的 wheel；私有或仅本地存在的 wheel 材料上传尚未包含在本版能力中。
+新调试镜像的 `/etc/pip.conf` 和默认安装源使用 `https://pypi.org/simple`。这只作用于本次新增镜像，不修改原 Base、现有调试环境或节点宿主机的 pip、APT、Docker 配置。离线 wheel 可以用于调试安装，但保存时仍需从固定源取得内容一致的 wheel；私有或仅本地存在的 wheel 材料上传尚未包含在本版能力中。
 
 ## 临时安装系统包（sudo / apt）
 
@@ -58,3 +58,16 @@ python3 -m unittest discover -s images/environment-builder -p 'test_*.py'
 ```
 
 `runtime_smoke.py` 默认验证 CPU 导入和 Python/launcher 路径；`--ray-local` 在专用验收容器检查本地 Ray worker。完整 GPU 与训练验证由平台专用验收任务完成。
+
+## 独立构建配置
+
+workspace 与 environment-builder 都是可选镜像，不随默认平台安装自动构建。必须提供自己的 `ENVIRONMENT_BASE_IMAGE=registry/namespace/image@sha256:...`，不能使用 mutable tag。二者构建上下文均为仓库根。该基础镜像必须具备 Python 3.10、兼容 CUDA/PyTorch/Ray、平台启动器与 ray 用户；先按照 raytrain-base 配方构建并验证。
+
+镜像构建阶段根据实际安装版本生成 `/etc/raytrain/environment-profile.json`，以 root 所有、0444 模式保存。运行时只信任此固定路径及其不可被普通用户写入的父目录；环境变量不能选择任意基础镜像或解释器。缺少或修改 profile 时拒绝保存环境。
+
+```bash
+docker build -f images/environment-workspace/Dockerfile --build-arg ENVIRONMENT_BASE_IMAGE="$ENVIRONMENT_BASE_IMAGE" -t "$WORKSPACE_IMAGE" .
+docker build -f images/environment-builder/Dockerfile --build-arg ENVIRONMENT_BASE_IMAGE="$ENVIRONMENT_BASE_IMAGE" -t "$BUILDER_IMAGE" .
+```
+
+默认使用公开 code-server、Ubuntu APT 和 PyPI；可通过对应 build ARG 指定自己的镜像与依赖镜像源。CPU 构建检查不等于目标 GPU 集群通过验收。

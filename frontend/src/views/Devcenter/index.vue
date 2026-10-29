@@ -85,7 +85,6 @@
         <template v-if="storageReady">
           <div>个人工作区: <span class="text-emerald-300">/workspace</span>（可写） · 个人文件: <span class="text-emerald-300">/mnt/storage/me</span>（可写） · 训练结果: <span class="text-emerald-300">/mnt/storage/me/runs</span>（可写）</div>
           <div>团队/公共数据: <span class="text-sky-300">/mnt/storage/team</span>、<span class="text-sky-300">/mnt/storage/public</span>（只读）</div>
-          <div>IDC 数据: <span class="text-sky-300">/mnt/idc/original</span>、<span class="text-sky-300">/mnt/idc/wellspiking</span>、<span class="text-sky-300">/mnt/idc/shared</span>（管理员登记后只读）</div>
           <div>Python 依赖: <span class="text-amber-200">cd /workspace &amp;&amp; python -m venv .venv &amp;&amp; . .venv/bin/activate &amp;&amp; pip install -r requirements.txt</span></div>
           <div>系统级 apt 依赖: 请在“调试镜像”下拉中选择团队发布的自定义 Harbor 镜像；停止工作区后通过 apt 安装的内容不会保留。</div>
         </template>

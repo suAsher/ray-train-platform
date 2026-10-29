@@ -53,7 +53,7 @@ export RAY_JOB_HEADERS='{"Authorization":"Bearer <平台 PAT>"}'
 # 不带 ray-platform 元数据时默认 1 卡；要多卡必须把这组元数据写全
 ray job submit --address "$RAY_ADDRESS" --working-dir . \\
   --metadata-json '{
-    "ray-platform.image": "harbor.wellspiking.ai/<项目>/<镜像>@sha256:<digest>",
+    "ray-platform.image": "registry.example.com/<项目>/<镜像>@sha256:<digest>",
     "ray-platform.worker-replicas": "2",
     "ray-platform.gpus-per-worker": "8",
     "ray-platform.cpu-per-worker": "32",

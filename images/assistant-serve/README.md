@@ -49,9 +49,9 @@
 
 现网4090D节点存在550.127.05与550.144.03驱动。NVIDIA说明CUDA12.x存在minor compatibility，但PTX JIT或新驱动功能可能失败，因此选择官方cu129变体实测，不使用默认CUDA13镜像、不启用面向部分专业卡的forward compatibility、不升级训练节点驱动。
 
-2026-09-22已在172.28.1.229的RTX4090D、550.144.03原生驱动上通过CUDA矩阵运算、Qwen3-8B-AWQ完整加载及两请求并发。冷加载115.32秒，17 token短问答单请求0.3201秒、双请求0.3286秒；这是引擎验收，不代表完整页面、RayService或训练回收验收，也不是业务吞吐基准。其他节点未据此自动放行。
+该镜像配方没有替新集群提供 GPU 验收结论。部署者须验证目标 GPU、驱动与 CUDA 组合，记录实际模型加载、并发、延迟和显存释放结果。
 
-镜像底座附带的`cuda-compat-12-9`会被该集群的NVIDIA hook写入动态库缓存，导致GeForce加载不支持的575版forward driver并报804。构建仅移除该可选兼容包，让进程使用宿主550驱动；保留CUDA12.9运行库和设备启动校验，`NVIDIA_REQUIRE_CUDA`限定`cuda>=12.4,driver>=550.127.05,driver<551`。不得设置`NVIDIA_DISABLE_REQUIRE`或修改宿主驱动绕过验收。完整接流与回收验收通过前，本地模式保持关闭。
+CUDA forward compatibility 包与驱动的适配必须在目标节点验证。当前 Dockerfile 对 CUDA 版本与驱动范围的约束是配方的一部分，不保证适用于所有 GPU。不得设置 NVIDIA_DISABLE_REQUIRE 绕过设备检查；变更底座或驱动范围后重新验证。
 
 构建机已发现的内部镜像候选（仍需版本实测）：
 

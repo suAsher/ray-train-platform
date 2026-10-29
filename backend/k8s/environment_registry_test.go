@@ -15,15 +15,15 @@ import (
 )
 
 func TestEnvironmentJobsSelectDestinationWithoutChangingSources(t *testing.T) {
-	for _, host := range []string{"", "harbor.wellspiking.ai", "harbor.qomolo.com"} {
+	for _, host := range []string{"", "registry.example.com", "registry-secondary.example.com"} {
 		t.Run(host, func(t *testing.T) {
 			r := environmentTestRunner()
-			r.config.ImagePullSecrets = []string{"pull-robot", "qomolo-pull-robot"}
+			r.config.ImagePullSecrets = []string{"pull-robot", "secondary-pull-robot"}
 			b := environmentTestBuild(r)
 			b.RegistryHost = host
 			wantHost := host
 			if wantHost == "" {
-				wantHost = "harbor.wellspiking.ai"
+				wantHost = "registry.example.com"
 			}
 			for _, phase := range []string{environmentbuild.Building, environmentbuild.Validating, environmentbuild.Pushing, environmentbuild.VerifyingPull} {
 				b.Status = phase
@@ -33,14 +33,14 @@ func TestEnvironmentJobsSelectDestinationWithoutChangingSources(t *testing.T) {
 				}
 				pod := job.Spec.Template.Spec
 				container := pod.Containers[0]
-				if !reflect.DeepEqual(pod.ImagePullSecrets, []corev1.LocalObjectReference{{Name: "pull-robot"}, {Name: "qomolo-pull-robot"}}) {
+				if !reflect.DeepEqual(pod.ImagePullSecrets, []corev1.LocalObjectReference{{Name: "pull-robot"}, {Name: "secondary-pull-robot"}}) {
 					t.Fatal("platform-managed pull credentials were changed")
 				}
 				if phase == environmentbuild.VerifyingPull {
 					if container.Image != wantHost+"/public/environment@"+b.ImageDigest || len(pod.Volumes) != 0 || len(container.VolumeMounts) != 0 {
 						t.Fatal("destination verification must pin the selected host without credential mounts")
 					}
-				} else if !strings.HasPrefix(container.Image, "harbor.wellspiking.ai/") {
+				} else if !strings.HasPrefix(container.Image, "registry.example.com/") {
 					t.Fatal("destination selection changed a trusted execution image")
 				}
 				if phase == environmentbuild.Validating {
@@ -62,7 +62,7 @@ func TestEnvironmentJobsSelectDestinationWithoutChangingSources(t *testing.T) {
 }
 
 func TestEnvironmentRunnerRejectsInvalidHostBeforeAnyClusterAction(t *testing.T) {
-	for _, host := range []string{"evil.example", "https://harbor.qomolo.com", "harbor.qomolo.com:443", "harbor.qomolo.com.evil.example", "harbor.qomolo.com/", "harbor.qomolo.com\n"} {
+	for _, host := range []string{"evil.example", "https://registry-secondary.example.com", "registry-secondary.example.com:443", "registry-secondary.example.com.evil.example", "registry-secondary.example.com/", "registry-secondary.example.com\n"} {
 		for _, phase := range []string{environmentbuild.Capturing, environmentbuild.Building, environmentbuild.Validating, environmentbuild.Pushing, environmentbuild.VerifyingPull} {
 			t.Run(host+"/"+phase, func(t *testing.T) {
 				r := environmentTestRunner()
@@ -91,12 +91,12 @@ func TestEnvironmentRunnerCannotReplayDestinationAcrossHosts(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			r := environmentTestRunner()
 			b := environmentTestBuild(r)
-			b.Status, b.RegistryHost = phase, "harbor.wellspiking.ai"
+			b.Status, b.RegistryHost = phase, "registry.example.com"
 			credentials := &environmentbuild.Credentials{Username: "alice", Secret: "test-push-only"}
 			if _, err := r.Step(context.Background(), b, credentials); err != nil {
 				t.Fatal(err)
 			}
-			b.RegistryHost = "harbor.qomolo.com"
+			b.RegistryHost = "registry-secondary.example.com"
 			if _, err := r.Step(context.Background(), b, credentials); err == nil {
 				t.Fatal("existing runtime resources were reused for another registry")
 			}
@@ -112,12 +112,12 @@ func TestEnvironmentLegacyRuntimeResourcesRemainWellspikingOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delete(job.Annotations, "platform.wellspiking.ai/environment-registry-host")
+	delete(job.Annotations, "raytrain.io/environment-registry-host")
 	r.client = NewClientFromInterfaces(nil, fake.NewSimpleClientset(job))
 	if _, err := r.Step(context.Background(), b, nil); err != nil {
 		t.Fatalf("legacy Wellspiking job was not accepted: %v", err)
 	}
-	b.RegistryHost = "harbor.qomolo.com"
+	b.RegistryHost = "registry-secondary.example.com"
 	if _, err := r.Step(context.Background(), b, nil); err == nil {
 		t.Fatal("legacy resource was reinterpreted as a Qomolo job")
 	}
@@ -125,9 +125,9 @@ func TestEnvironmentLegacyRuntimeResourcesRemainWellspikingOnly(t *testing.T) {
 
 func TestEnvironmentRunnerQomoloCredentialIsEphemeralAndNotPullAuth(t *testing.T) {
 	r := environmentTestRunner()
-	r.config.ImagePullSecrets = []string{"pull-robot", "qomolo-pull-robot"}
+	r.config.ImagePullSecrets = []string{"pull-robot", "secondary-pull-robot"}
 	b := environmentTestBuild(r)
-	b.Status, b.RegistryHost = environmentbuild.Pushing, "harbor.qomolo.com"
+	b.Status, b.RegistryHost = environmentbuild.Pushing, "registry-secondary.example.com"
 	ctx := context.Background()
 	if _, err := r.Step(ctx, b, &environmentbuild.Credentials{Username: "alice", Secret: "test-push-only"}); err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestEnvironmentRunnerQomoloCredentialIsEphemeralAndNotPullAuth(t *testing.T
 }
 
 func TestEnvironmentSourceImagePolicyRemainsWellspikingOnly(t *testing.T) {
-	for _, image := range []string{"harbor.qomolo.com/platform/image@sha256:" + strings.Repeat("a", 64), "harbor.wellspiking.ai/platform/image:latest"} {
+	for _, image := range []string{"registry-secondary.example.com/platform/image@sha256:" + strings.Repeat("a", 64), "registry.example.com/platform/image:latest"} {
 		if environmentPinnedImage(image) {
 			t.Fatal("source image policy accepted an unsupported source")
 		}

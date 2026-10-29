@@ -7,7 +7,8 @@ activateController: false
 
 # Required when enabled; use the independently built controller image digest.
 image: ""
-helperImage: harbor.wellspiking.ai/guofeng.su/busybox@sha256:ff6bba6f18535e7ccb3c1bbed0b84e5c733d7d9dd8815f1ea93ee73073135aa4
+# Supply a publicly sourced busybox image pinned by its verified digest.
+helperImage: ""
 
 # Seed complete external maps from the live provisioner maps before activation;
 # this chart never creates them. Only their config.json is controller-owned.

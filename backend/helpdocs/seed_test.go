@@ -31,7 +31,7 @@ func TestEmbeddedDocumentsAreValidStableAndIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(docs) != 37 {
+	if len(docs) != 36 {
 		t.Fatalf("got %d seeded docs", len(docs))
 	}
 	seen := map[string]bool{}
@@ -105,13 +105,13 @@ func TestPublicGuidesAreCondensedUserFacingRunbooks(t *testing.T) {
 		"版本化数据集",
 		"交互式调试",
 		"export PATH=\"$HOME/.local/bin:$PATH\"",
-		"spk-rayjob login --server 'https://raytrain.wellspiking.ai' --token-stdin",
+		"spk-rayjob login --server 'https://raytrain.example.com' --token-stdin",
 		"spk-rayjob submit --watch",
 		"--data-mode mount",
 		"--workers 2 --gpus-per-worker 2",
 		"--data-mode streaming",
 		"--resume-from-job JOB_ID",
-		"MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'",
+		"MLFLOW_TRACKING_URI='https://raytrain.example.com/api/v1/mlflow-native'",
 		"mlflow==3.14.0",
 		"mlflow:full",
 		"mlflow.log_metric",
@@ -139,7 +139,7 @@ func TestHelpCatalogPreservesPublishedTopicsAndReadingOrder(t *testing.T) {
 		ray-data streaming observability mlflow diagnose scaling resume artifacts datasets
 		access quota scheduling-topology errors preflight uploads custom-environment
 		command-recipes cli-onboarding-v2 unified-login-and-roles portal-user-feature-map
-		idc-sync-lifecycle portal-browser-tools-and-queue mlflow-framework-metrics
+		portal-browser-tools-and-queue mlflow-framework-metrics
 		worker-connect-and-scheduling-boundary mlflow-api-with-pat streaming-validation
 		telemetry-boundary`)
 	byID := make(map[string]bool, len(docs))

@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-const environmentRegistryHostAnnotation = "platform.wellspiking.ai/environment-registry-host"
+const environmentRegistryHostAnnotation = "raytrain.io/environment-registry-host"
 
 type EnvironmentRunnerConfig struct {
 	WorkspaceProfiles                                       []environmentbuild.WorkspaceProfile

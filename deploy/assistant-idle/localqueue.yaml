@@ -1,8 +1,0 @@
-apiVersion: kueue.x-k8s.io/v1beta2
-kind: LocalQueue
-metadata:
-  # New name: do not mutate the existing LocalQueue's immutable CQ binding.
-  name: assistant-idle-private-lq
-  namespace: PLACEHOLDER_ASSISTANT_NAMESPACE
-spec:
-  clusterQueue: assistant-idle-private-cq

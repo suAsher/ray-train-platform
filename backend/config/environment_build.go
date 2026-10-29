@@ -10,6 +10,7 @@ import (
 	"ray-train-platform-backend/environmentbuild"
 	"ray-train-platform-backend/registryauth"
 	"strings"
+	validation "k8s.io/apimachinery/pkg/util/validation"
 )
 
 // EnvironmentBuildConfig controls only newly requested environment builds.
@@ -49,7 +50,7 @@ func loadEnvironmentBuildConfig() (EnvironmentBuildConfig, error) {
 	}
 	for _, item := range images {
 		*item.target = strings.TrimSpace(os.Getenv(item.key))
-		if !pinnedImagePattern.MatchString(*item.target) || !strings.HasPrefix(*item.target, "harbor.wellspiking.ai/") {
+		if !environmentImageAllowed(*item.target, cfg.RegistryHosts) {
 			return EnvironmentBuildConfig{}, fmt.Errorf("%s must be a pinned Harbor image", item.key)
 		}
 	}
@@ -57,7 +58,7 @@ func loadEnvironmentBuildConfig() (EnvironmentBuildConfig, error) {
 		seen := map[string]bool{cfg.WorkspaceImage: true}
 		for _, entry := range strings.Split(raw, ",") {
 			image := strings.TrimSpace(entry)
-			if !pinnedImagePattern.MatchString(image) || !strings.HasPrefix(image, "harbor.wellspiking.ai/") {
+			if !environmentImageAllowed(image, cfg.RegistryHosts) {
 				return EnvironmentBuildConfig{}, fmt.Errorf("ENVIRONMENT_COMPATIBLE_WORKSPACE_IMAGES must contain only pinned Harbor images")
 			}
 			if !seen[image] {
@@ -81,23 +82,39 @@ func loadEnvironmentBuildConfig() (EnvironmentBuildConfig, error) {
 	if err != nil {
 		return EnvironmentBuildConfig{}, fmt.Errorf("ENVIRONMENT_WORKSPACE_PROFILES must contain unique pinned Harbor image profiles and valid version metadata")
 	}
+	for _, profile := range cfg.WorkspaceProfiles {
+		for _, image := range []string{profile.WorkspaceImage, profile.BaseImage, profile.PrepareImage} {
+			if !environmentImageAllowed(image, cfg.RegistryHosts) {
+				return EnvironmentBuildConfig{}, fmt.Errorf("ENVIRONMENT_WORKSPACE_PROFILES contains an image outside the registry allowlist")
+			}
+		}
+	}
 	cfg.EncryptionKey, err = base64.StdEncoding.DecodeString(os.Getenv("ENVIRONMENT_AUTH_KEY"))
 	if err != nil || len(cfg.EncryptionKey) != 32 {
 		return EnvironmentBuildConfig{}, fmt.Errorf("ENVIRONMENT_AUTH_KEY must encode a separate 32-byte key")
 	}
-	cfg.StorageClass = envOr("ENVIRONMENT_STORAGE_CLASS", "ebs-ssd")
+	cfg.StorageClass = strings.TrimSpace(os.Getenv("ENVIRONMENT_STORAGE_CLASS"))
 	cfg.WheelIndexURL = strings.TrimSpace(os.Getenv("ENVIRONMENT_WHEEL_INDEX_URL"))
 	index, err := url.Parse(cfg.WheelIndexURL)
 	if err != nil || index.Scheme != "https" || index.Hostname() == "" || index.User != nil || index.RawQuery != "" || index.Fragment != "" {
 		return EnvironmentBuildConfig{}, fmt.Errorf("ENVIRONMENT_WHEEL_INDEX_URL must be a credential-free HTTPS package index")
 	}
-	cfg.NodeSelector = map[string]string{"platform.wellspiking.ai/gpu-pool": "production"}
+	if raw := strings.TrimSpace(os.Getenv("ENVIRONMENT_NODE_SELECTOR_JSON")); raw != "" {
+		if json.Unmarshal([]byte(raw), &cfg.NodeSelector) != nil || cfg.NodeSelector == nil {
+			return EnvironmentBuildConfig{}, fmt.Errorf("ENVIRONMENT_NODE_SELECTOR_JSON must be a label map")
+		}
+		for key, value := range cfg.NodeSelector {
+			if len(validation.IsQualifiedName(key)) != 0 || len(validation.IsValidLabelValue(value)) != 0 {
+				return EnvironmentBuildConfig{}, fmt.Errorf("ENVIRONMENT_NODE_SELECTOR_JSON contains an invalid label")
+			}
+		}
+	}
 	return cfg, nil
 }
 
 func environmentRegistryHosts(value string) ([]string, error) {
 	if strings.TrimSpace(value) == "" {
-		return []string{registryauth.Host}, nil
+		return nil, fmt.Errorf("ENVIRONMENT_REGISTRY_HOSTS is required when builds are enabled")
 	}
 	var hosts []string
 	seen := make(map[string]bool)
@@ -113,4 +130,20 @@ func environmentRegistryHosts(value string) ([]string, error) {
 		}
 	}
 	return hosts, nil
+}
+
+func environmentImageAllowed(image string, hosts []string) bool {
+	if !pinnedImagePattern.MatchString(image) {
+		return false
+	}
+	host, _, ok := strings.Cut(image, "/")
+	if !ok {
+		return false
+	}
+	for _, allowed := range hosts {
+		if host == allowed {
+			return true
+		}
+	}
+	return false
 }

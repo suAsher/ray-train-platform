@@ -1,7 +1,0 @@
-apiVersion: v2
-name: victoriametrics-cluster
-description: Additive VictoriaMetrics CRs; self monitoring only, no existing Prometheus changes
-type: application
-version: 0.1.0
-appVersion: v1.153.0
-kubeVersion: ">=1.25.0-0"

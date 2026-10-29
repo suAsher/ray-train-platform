@@ -142,7 +142,7 @@ func TestEnvironmentImageGuideOrdersSaveAndTrainWorkflow(t *testing.T) {
 		previous = index
 	}
 	for _, text := range []string{
-		"harbor.wellspiking.ai | 个人资料中的 CLI Secret",
+		"registry.example.com | 镜像仓库签发的访问凭据",
 		"harbor.qomolo.com | 账号密码",
 		"没有固定到某个人的项目",
 		"仅本人", "当前团队", "Harbor 仓库自身",

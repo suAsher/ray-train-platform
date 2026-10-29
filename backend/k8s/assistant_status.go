@@ -211,7 +211,7 @@ func assistantPodRole(pod corev1.Pod) string {
 	if pod.Labels["app.kubernetes.io/component"] != "assistant-idle" {
 		return ""
 	}
-	switch pod.Labels["raytrain.wellspiking.ai/assistant-role"] {
+	switch pod.Labels["raytrain.io/assistant-role"] {
 	case "head":
 		return "head"
 	case "worker":

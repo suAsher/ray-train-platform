@@ -17,7 +17,7 @@ import sys
 NAMESPACE = "ray-cache-local"
 CONTROLLER = f"system:serviceaccount:{NAMESPACE}:node-onboarding"
 POLICIES = ["nodes", "configmaps", "owned-resources", "pods", "pvcs", "leases", "state", "ready-label"]
-READY = "platform.wellspiking.ai/cache-ready"
+READY = "raytrain.io/cache-ready"
 
 
 def main():
@@ -119,7 +119,7 @@ def main():
             raise RuntimeError("Fixture namespace must be ray-cache-local")
         create(f"exact {name}", obj)
 
-    dedicated_key = "platform.wellspiking.ai/dedicated-tenant"
+    dedicated_key = "raytrain.io/dedicated-tenant"
     dedicated = [t for t in probe["spec"].get("tolerations", []) if t.get("key") == dedicated_key]
     if dedicated:
         actual_taints = node.get("spec", {}).get("taints", [])

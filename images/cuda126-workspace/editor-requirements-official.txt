@@ -1,7 +1,0 @@
-# Official hashes for isolated editor core; dependencies resolve against Base.
-jupyterlab==4.5.11 --hash=sha256:e23e3d76b92ad172b529fb6faf91e3edd264ffdff65b543949eb85daf7f8b113
-jupyter-server==2.21.0 --hash=sha256:2ae2e5ce5e97268553e25aebe040197455673d925b5fc7995477153318160cf7
-bleach==6.4.0 --hash=sha256:4b6b6a54fff2e69a3dde9d21cc6301220bee3c3cb792187d11403fd795031081
-mistune==3.3.3 --hash=sha256:99de1585e42dcbd826faa9e11a202727a5e202e4e4722a4c69ac1ff615793dd7
-nbconvert==7.17.1 --hash=sha256:aa85c087b435e7bf1ffd03319f658e285f2b89eccab33bc1ba7025495ab3e7c8
-soupsieve==2.9.0 --hash=sha256:a2b2c76d67df2382d245409fd71e321a571717e58463efa32ace87dcadac2c12

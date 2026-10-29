@@ -6,7 +6,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: {{ include "ray-train-platform.fullname" . }}-dataset
-  namespace: {{ default .Values.namespace (get $monitoring "namespace") }}
+  namespace: {{ default .Release.Namespace (get $monitoring "namespace") }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: dataset-observability
@@ -15,7 +15,7 @@ spec:
     - name: ray-train-platform.dataset-publication
       rules:
         - alert: RayDatasetPublicationFailed
-          expr: kube_job_status_failed{namespace={{ .Values.namespace | quote }},job_name=~"dataset-publisher-.*"} > 0
+          expr: kube_job_status_failed{namespace={{ .Release.Namespace | quote }},job_name=~"dataset-publisher-.*"} > 0
           for: {{ default "2m" (get $rules "publicationFailedFor") }}
           labels:
             severity: critical
@@ -24,9 +24,9 @@ spec:
             description: Inspect the governed publication run and publisher logs before retrying.
         - alert: RayDatasetPublicationStalled
           expr: |
-            (time() - kube_job_status_start_time{namespace={{ .Values.namespace | quote }},job_name=~"dataset-publisher-.*"} > {{ default 21600 (get $rules "publicationStalledSeconds") }})
+            (time() - kube_job_status_start_time{namespace={{ .Release.Namespace | quote }},job_name=~"dataset-publisher-.*"} > {{ default 21600 (get $rules "publicationStalledSeconds") }})
             and on (namespace, job_name)
-            (kube_job_status_active{namespace={{ .Values.namespace | quote }},job_name=~"dataset-publisher-.*"} > 0)
+            (kube_job_status_active{namespace={{ .Release.Namespace | quote }},job_name=~"dataset-publisher-.*"} > 0)
           for: {{ default "15m" (get $rules "publicationStalledFor") }}
           labels:
             severity: warning

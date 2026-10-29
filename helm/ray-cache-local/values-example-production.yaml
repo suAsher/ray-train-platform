@@ -1,0 +1,23 @@
+images:
+  provisioner: docker.io/rancher/local-path-provisioner:v0.0.32
+  helper: docker.io/library/busybox:1.36.1
+
+nodePathMap:
+  - node: "gpu-node-a"
+    paths:
+      - /data1/ray-cache
+      - /data2/ray-cache
+  - node: "gpu-node-b"
+    paths:
+      - /data1/ray-cache
+      - /data2/ray-cache
+
+cache:
+  allowedRoots: [/data1/ray-cache, /data2/ray-cache]
+
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+  prometheusRule:
+    enabled: true

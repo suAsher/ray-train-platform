@@ -16,6 +16,38 @@ spec.loader.exec_module(runtime)
 
 
 class RuntimeContractTest(unittest.TestCase):
+    def setUp(self):
+        # Tests unrelated to profile validation run against an explicit,
+        # trusted fixture instead of relying on a production-specific fallback.
+        if self._testMethodName.startswith('test_profile') or self._testMethodName.startswith('test_trusted_profile'):
+            return
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = pathlib.Path(directory.name) / 'profile.json'
+        profile = self.profile()
+        path.write_text(json.dumps(profile))
+        for name, value in [('PROFILE', path), ('ACTIVE_PROFILE', profile), ('BASE_IMAGE', profile['baseImage']), ('PROFILE_ERROR', False)]:
+            patcher = mock.patch.object(runtime, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        loader = mock.patch.object(runtime, 'load_profile', return_value=profile)
+        loader.start()
+        self.addCleanup(loader.stop)
+
+    def test_profile_is_required_without_legacy_base(self):
+        with mock.patch.object(runtime, 'ACTIVE_PROFILE', None), mock.patch.object(runtime, 'load_profile', return_value=None):
+            with self.assertRaises(runtime.CaptureError):
+                runtime.verify_active_profile()
+
+    def test_profile_allows_explicit_registry_pinned_bases(self):
+        for repository in ['ghcr.io/example/training', 'registry.example.com:5000/team/base', 'docker.io/library/python', 'team/base:v1']:
+            profile = {**self.profile(), 'baseImage': repository + '@sha256:' + 'a' * 64}
+            with tempfile.TemporaryDirectory() as directory:
+                path = pathlib.Path(directory) / 'profile.json'
+                path.write_text(json.dumps(profile))
+                with mock.patch.object(runtime, 'PROFILE', path), mock.patch.object(runtime, 'verify_profile_permissions'):
+                    self.assertEqual(runtime.load_profile(), profile)
+
     def test_profile_requires_trusted_file_and_every_parent(self):
         def node(mode, owner=0):
             value = mock.Mock()
@@ -43,7 +75,7 @@ class RuntimeContractTest(unittest.TestCase):
                     runtime.verify_profile_permissions()
 
     def profile(self):
-        return {'schemaVersion': 1, 'baseImage': 'harbor.wellspiking.ai/guofeng.su/cuda126-base@sha256:' + 'b' * 64,
+        return {'schemaVersion': 1, 'baseImage': 'registry.example.com/training/cuda126-base@sha256:' + 'b' * 64,
                 'basePython': '/usr/bin/python3.10', 'versions': {'python': '3.10', 'pytorch': '2.13.0+cu126', 'cuda': '12.6', 'ray': '2.58.0'}}
 
     def test_trusted_profile_selects_pinned_base_without_environment_override(self):
@@ -55,7 +87,7 @@ class RuntimeContractTest(unittest.TestCase):
                 self.assertEqual(runtime.load_profile(), self.profile())
 
     def test_profile_rejects_unpinned_image_python_path_and_unknown_fields(self):
-        for field, value in [('baseImage', 'evil:latest'), ('baseImage', 'harbor.wellspiking.ai/guofeng.su/../other@sha256:' + 'a' * 64),
+        for field, value in [('baseImage', 'evil:latest'), ('baseImage', 'registry.example.com/training/../other@sha256:' + 'a' * 64),
                              ('basePython', '/workspace/python'), ('schemaVersion', 2), ('secret', 'x')]:
             profile = self.profile()
             profile[field] = value

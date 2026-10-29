@@ -55,8 +55,8 @@ func (c *Client) ListGPUNodeUsage(ctx context.Context) ([]GPUNodeUsage, error) {
 		item := GPUNodeUsage{
 			NodeName: node.Name, Capacity: capacity, Allocatable: allocatable, Allocated: used, Available: available,
 			AcceleratorClass: acceleratorClassFromNodeLabel(node.Labels["accelerator"]),
-			GPUPool:          node.Labels["platform.wellspiking.ai/gpu-pool"],
-			AssignedTenant:   node.Labels["platform.wellspiking.ai/tenant"],
+			GPUPool:          node.Labels["raytrain.io/gpu-pool"],
+			AssignedTenant:   node.Labels["raytrain.io/tenant"],
 		}
 		usage = append(usage, withNodeOnboarding(item, node))
 	}
@@ -86,7 +86,7 @@ func withNodeOnboarding(item GPUNodeUsage, node corev1.Node) GPUNodeUsage {
 		}
 	}
 	item.NodeReady, item.Cordoned = &ready, &cordoned
-	raw := node.Annotations["platform.wellspiking.ai/onboarding-state"]
+	raw := node.Annotations["raytrain.io/onboarding-state"]
 	var state struct {
 		UID   string `json:"uid"`
 		Stage string `json:"stage"`
@@ -99,9 +99,9 @@ func withNodeOnboarding(item GPUNodeUsage, node corev1.Node) GPUNodeUsage {
 	default:
 		return item
 	}
-	cacheReady := state.Stage == "ready" && node.Labels["platform.wellspiking.ai/cache-ready"] == "true"
+	cacheReady := state.Stage == "ready" && node.Labels["raytrain.io/cache-ready"] == "true"
 	item.CacheReady, item.OnboardingStage = &cacheReady, state.Stage
-	reason := []rune(node.Annotations["platform.wellspiking.ai/onboarding-reason"])
+	reason := []rune(node.Annotations["raytrain.io/onboarding-reason"])
 	if len(reason) > 400 {
 		reason = reason[:400]
 	}

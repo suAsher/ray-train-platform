@@ -11,7 +11,7 @@ import (
 
 func TestEnvironmentWorkspaceProfilesConfigAndChart(t *testing.T) {
 	environmentRegistryConfig(t)
-	profile := environmentbuild.WorkspaceProfile{WorkspaceImage: "harbor.wellspiking.ai/public/debug@sha256:" + strings.Repeat("b", 64), BaseImage: "harbor.wellspiking.ai/public/base@sha256:" + strings.Repeat("c", 64), PrepareImage: "harbor.wellspiking.ai/public/prepare@sha256:" + strings.Repeat("d", 64), Environment: domain.ImageEnvironment{CUDA: "12.6", Python: "3.10", PyTorch: "2.6.0+cu126"}}
+	profile := environmentbuild.WorkspaceProfile{WorkspaceImage: "registry.example.com/public/debug@sha256:" + strings.Repeat("b", 64), BaseImage: "registry.example.com/public/base@sha256:" + strings.Repeat("c", 64), PrepareImage: "registry.example.com/public/prepare@sha256:" + strings.Repeat("d", 64), Environment: domain.ImageEnvironment{CUDA: "12.6", Python: "3.10", PyTorch: "2.6.0+cu126"}}
 	raw, _ := json.Marshal([]environmentbuild.WorkspaceProfile{profile})
 	t.Setenv("ENVIRONMENT_WORKSPACE_PROFILES", string(raw))
 	cfg, err := loadEnvironmentBuildConfig()

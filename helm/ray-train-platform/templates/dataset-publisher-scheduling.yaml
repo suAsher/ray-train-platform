@@ -36,7 +36,7 @@ metadata:
 spec:
   namespaceSelector:
     matchLabels:
-      kubernetes.io/metadata.name: {{ .Values.namespace | quote }}
+      kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
   resourceGroups:
     - coveredResources: ["cpu", "memory"]
       flavors:
@@ -51,7 +51,7 @@ apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue
 metadata:
   name: {{ $localQueueName }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ray-train-platform.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: dataset-publisher

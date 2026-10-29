@@ -11,7 +11,7 @@ import (
 )
 
 func TestPublisherFlagsPreserveLegacyDefaultAndSelectQomolo(t *testing.T) {
-	for _, host := range []string{"", registryauth.QomoloHost} {
+	for _, host := range []string{"", registryauth.SecondaryHost} {
 		flags := flag.NewFlagSet("publisher", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
 		options := publisherFlags(flags)
@@ -31,7 +31,7 @@ func TestPublisherFlagsPreserveLegacyDefaultAndSelectQomolo(t *testing.T) {
 }
 
 func TestPublisherRejectsInvalidRegistryBeforeReadingCredentials(t *testing.T) {
-	for _, host := range []string{"evil.invalid", "https://" + registryauth.QomoloHost, registryauth.QomoloHost + ":443"} {
+	for _, host := range []string{"evil.invalid", "https://" + registryauth.SecondaryHost, registryauth.SecondaryHost + ":443"} {
 		_, err := run(context.Background(), registryauth.PublishRequest{}, t.TempDir(), host)
 		if !errors.Is(err, registryauth.ErrInvalidTarget) || errorCode(err) != "REGISTRY_TARGET_INVALID" {
 			t.Fatalf("invalid registry was not rejected before credential loading: %v", err)

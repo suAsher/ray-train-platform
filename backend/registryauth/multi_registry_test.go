@@ -25,7 +25,7 @@ func selectedTestClient(t *testing.T, host string, transport roundTripFunc) *Cli
 }
 
 func TestNormalizeHostAllowsOnlyCanonicalHarborHosts(t *testing.T) {
-	for _, input := range []string{"", Host, QomoloHost} {
+	for _, input := range []string{"", Host, SecondaryHost, "harbor.custom.example"} {
 		want := input
 		if want == "" {
 			want = Host
@@ -36,10 +36,10 @@ func TestNormalizeHostAllowsOnlyCanonicalHarborHosts(t *testing.T) {
 		}
 	}
 	for _, input := range []string{
-		"https://" + Host, "http://" + QomoloHost, Host + ":443", QomoloHost + ":443",
-		"user:fixture-private-secret@" + QomoloHost, QomoloHost + "/", Host + ".",
-		strings.ToUpper(QomoloHost), " " + Host, QomoloHost + " ", "evil.invalid", Host + ".evil.invalid",
-		QomoloHost + "?token=fixture-private-secret", QomoloHost + "#fragment", QomoloHost + "\n",
+		"https://" + Host, "http://" + SecondaryHost, Host + ":443", SecondaryHost + ":443",
+		"user:fixture-private-secret@" + SecondaryHost, SecondaryHost + "/", Host + ".",
+		strings.ToUpper(SecondaryHost), " " + Host, SecondaryHost + " ",
+		SecondaryHost + "?token=fixture-private-secret", SecondaryHost + "#fragment", SecondaryHost + "\n",
 	} {
 		if got, err := NormalizeHost(input); !errors.Is(err, ErrInvalidTarget) || got != "" || strings.Contains(err.Error(), "fixture-private-secret") {
 			t.Fatalf("unsafe normalization: host=%q error=%v", got, err)
@@ -51,7 +51,7 @@ func TestNormalizeHostAllowsOnlyCanonicalHarborHosts(t *testing.T) {
 }
 
 func TestSelectedRegistryBindsIdentityProjectsAndRepositoryGrant(t *testing.T) {
-	for _, input := range []string{"", Host, QomoloHost} {
+	for _, input := range []string{"", Host, SecondaryHost} {
 		t.Run("registry_"+input, func(t *testing.T) {
 			host := input
 			if host == "" {
@@ -94,9 +94,9 @@ func TestSelectedRegistryBindsIdentityProjectsAndRepositoryGrant(t *testing.T) {
 }
 
 func TestSelectedRegistryRejectsCrossHarborQueryRedirectAndSanitizesErrors(t *testing.T) {
-	for _, host := range []string{Host, QomoloHost} {
-		other := QomoloHost
-		if host == QomoloHost {
+	for _, host := range []string{Host, SecondaryHost} {
+		other := SecondaryHost
+		if host == SecondaryHost {
 			other = Host
 		}
 		for _, operation := range []func(*Client) error{
@@ -130,7 +130,7 @@ func TestSelectedRegistryRejectsCrossHarborQueryRedirectAndSanitizesErrors(t *te
 }
 
 func TestSelectedRegistryRejectsPullOnlyOrDifferentRepositoryGrant(t *testing.T) {
-	for _, host := range []string{Host, QomoloHost} {
+	for _, host := range []string{Host, SecondaryHost} {
 		for _, token := range []string{jwt([]string{"pull"}, "team/model"), jwt([]string{"push"}, "other/model")} {
 			client := selectedTestClient(t, host, func(request *http.Request) (*http.Response, error) {
 				if request.URL.Host != host {
@@ -147,7 +147,7 @@ func TestSelectedRegistryRejectsPullOnlyOrDifferentRepositoryGrant(t *testing.T)
 }
 
 func TestSelectedRegistryPublishesAndVerifiesOnlySelectedTarget(t *testing.T) {
-	for _, host := range []string{Host, QomoloHost} {
+	for _, host := range []string{Host, SecondaryHost} {
 		t.Run(host, func(t *testing.T) {
 			directory, digest := testLayout(t)
 			handler := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
@@ -185,7 +185,7 @@ func TestSelectedRegistryPublishesAndVerifiesOnlySelectedTarget(t *testing.T) {
 }
 
 func TestQomoloClientCannotAssembleWithWellspikingPullCredentials(t *testing.T) {
-	client := selectedTestClient(t, QomoloHost, func(*http.Request) (*http.Response, error) {
+	client := selectedTestClient(t, SecondaryHost, func(*http.Request) (*http.Response, error) {
 		t.Fatal("Qomolo publish client used platform pull credentials")
 		return nil, nil
 	})
@@ -194,7 +194,7 @@ func TestQomoloClientCannotAssembleWithWellspikingPullCredentials(t *testing.T) 
 	if _, err := client.Assemble(context.Background(), request); !errors.Is(err, ErrInvalidTarget) {
 		t.Fatalf("publish registry client assembled source image: %v", err)
 	}
-	request.Base = QomoloHost + "/team/base@sha256:" + strings.Repeat("a", 64)
+	request.Base = SecondaryHost + "/team/base@sha256:" + strings.Repeat("a", 64)
 	if _, err := NewClient().Assemble(context.Background(), request); !errors.Is(err, ErrInvalidTarget) {
 		t.Fatalf("default assembler accepted Qomolo source: %v", err)
 	}

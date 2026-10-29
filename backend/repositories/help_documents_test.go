@@ -317,7 +317,7 @@ func TestPublicHelpDocumentsFoldPublishedSeedContentIntoSevenGuides(t *testing.T
 		"### 第一次跑通",
 		"### CLI 安装、登录与升级",
 		"SHA-256",
-		"spk-rayjob login --server 'https://raytrain.wellspiking.ai' --token-stdin",
+		"spk-rayjob login --server 'https://raytrain.example.com' --token-stdin",
 	})
 	assertMarkdownContains(t, byID["data"].Markdown, []string{
 		"### 代码怎么进来",
@@ -347,7 +347,7 @@ func TestPublicHelpDocumentsFoldPublishedSeedContentIntoSevenGuides(t *testing.T
 		"### 连接自己的训练 Worker",
 	})
 	assertMarkdownContains(t, byID["mlflow"].Markdown, []string{
-		"MLFLOW_TRACKING_URI='https://raytrain.wellspiking.ai/api/v1/mlflow-native'",
+		"MLFLOW_TRACKING_URI='https://raytrain.example.com/api/v1/mlflow-native'",
 		"### 让训练指标显示在 MLflow",
 		"mlflow.log_metric",
 		"### 查询实验、Run 和历史指标",
@@ -372,7 +372,7 @@ func TestPublicHelpDocumentsFoldPublishedSeedContentIntoSevenGuides(t *testing.T
 		"外部实验",
 		"独立实验兼容入口",
 		"当前仅支持六个方法",
-		"SDK Tracking URI 为 `https://raytrain.wellspiking.ai/api/v1/mlflow-tracking`，不是原生管理页面的地址",
+		"SDK Tracking URI 为 `https://raytrain.example.com/api/v1/mlflow-tracking`，不是原生管理页面的地址",
 		"平台 Run ID",
 		"平台实验 ID",
 		"受限集成",

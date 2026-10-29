@@ -6,14 +6,14 @@
 # The interactive tools run on the Ray worker that requests a GPU. Use the GPU
 # Ray image so CUDA libraries and nvidia-smi are present in exactly the shell,
 # JupyterLab and VS Code environment the user enters.
-ARG CODE_SERVER_IMAGE=harbor.wellspiking.ai/hub/codercom/code-server:4.93.1
-ARG WORKSPACE_RAY_BASE_IMAGE=harbor.wellspiking.ai/hub/rayproject/ray:2.35.0-py310-gpu
+ARG CODE_SERVER_IMAGE=codercom/code-server:4.93.1
+ARG WORKSPACE_RAY_BASE_IMAGE=rayproject/ray:2.35.0-py310-gpu
 FROM ${CODE_SERVER_IMAGE} AS code-server
 
 FROM ${WORKSPACE_RAY_BASE_IMAGE} AS workspace-legacy
 
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG APT_MIRROR=http://repo.wellspiking.ai/repository/ubuntu-jammy
+ARG APT_MIRROR=http://archive.ubuntu.com/ubuntu
 # The debug workspace must contain the same deep-learning stack as the default
 # training image. Without torch, `import torch` fails in JupyterLab and the
 # GPU looks absent even though nvidia-smi sees it — which is exactly how the
@@ -42,26 +42,25 @@ RUN printf '%s\n' \
       torch==2.4.1 torchvision==0.19.1 \
  && printf '%s\n' \
       'default_channels:' \
-      '- https://repo.wellspiking.ai/repository/conda-main' \
-      '- https://repo.wellspiking.ai/repository/conda-r' \
-      '- https://repo.wellspiking.ai/repository/conda-msys2' \
+      '- https://repo.anaconda.com/pkgs/main' \
+      '- https://repo.anaconda.com/pkgs/r' \
+      '- https://repo.anaconda.com/pkgs/msys2' \
       'custom_multichannels:' \
       '  defaults:' \
-      '  - https://repo.wellspiking.ai/repository/conda-main' \
-      '  - https://repo.wellspiking.ai/repository/conda-r' \
-      '  - https://repo.wellspiking.ai/repository/conda-msys2' \
+      '  - https://repo.anaconda.com/pkgs/main' \
+      '  - https://repo.anaconda.com/pkgs/r' \
+      '  - https://repo.anaconda.com/pkgs/msys2' \
       'channels:' \
-      '- https://repo.wellspiking.ai/repository/conda-main' \
-      '- https://repo.wellspiking.ai/repository/conda-r' \
-      '- https://repo.wellspiking.ai/repository/conda-msys2' \
-      '- https://repo.wellspiking.ai/repository/conda-forge' \
+      '- https://repo.anaconda.com/pkgs/main' \
+      '- https://repo.anaconda.com/pkgs/r' \
+      '- https://repo.anaconda.com/pkgs/msys2' \
+      '- https://conda.anaconda.org/conda-forge' \
       'show_channel_urls: true' \
       > /home/ray/.condarc \
  && mkdir -p /workspace/.cache/pip /workspace/.cache/pycache \
  && chown -R ray:users /home/ray /workspace
 
-# Copy a version-pinned code-server distribution from the internal Harbor
-# mirror. This makes image builds independent of GitHub release downloads.
+# Copy a version-pinned code-server distribution from its public image.
 COPY --from=code-server /usr/lib/code-server /usr/lib/code-server
 COPY --from=code-server /usr/bin/code-server /usr/bin/code-server
 COPY raytrain-launch.py /usr/local/bin/raytrain-launch

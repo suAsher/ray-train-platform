@@ -15,7 +15,6 @@ import (
 )
 
 type WorkspaceRenderOptions struct {
-	PersonalStorageClaim         string
 	WorkerNodeAffinityPreference []string
 	NodeSelector                 map[string]string
 	DedicatedNodes               map[string][]string
@@ -23,8 +22,6 @@ type WorkspaceRenderOptions struct {
 	RayVersion                   string
 	ServiceAccount               string
 	ImagePullSecrets             []string
-	IDCExistingClaim             string
-	IDCMountPath                 string
 	JupyterBasePath              string
 	DataMounts                   DataMountPlan
 }
@@ -51,23 +48,11 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 	if rayVersion == "" {
 		rayVersion = "2.35.0"
 	}
-	mountPath := options.IDCMountPath
-	if mountPath == "" {
-		mountPath = "/mnt/idc"
-	}
 	volumes := []any{
 		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Gi"}},
 	}
-	useLegacyIDC := options.IDCExistingClaim != "" && !options.DataMounts.hasGovernedIDC()
-	if useLegacyIDC {
-		volumes = append(volumes, map[string]any{"name": "idc-storage", "persistentVolumeClaim": map[string]any{"claimName": options.IDCExistingClaim}})
-	}
 	headMounts := []any{map[string]any{"name": "dshm", "mountPath": "/dev/shm"}}
 	workerMounts := []any{map[string]any{"name": "dshm", "mountPath": "/dev/shm"}}
-	if useLegacyIDC {
-		headMounts = append(headMounts, map[string]any{"name": "idc-storage", "mountPath": mountPath, "readOnly": true})
-		workerMounts = append(workerMounts, map[string]any{"name": "idc-storage", "mountPath": mountPath, "readOnly": true})
-	}
 	volumesForPlan := volumes
 	headMounts, volumesForPlan = appendDataMountPlan(headMounts, volumesForPlan, options.DataMounts)
 	workerMounts, _ = appendDataMountPlan(workerMounts, volumes, options.DataMounts)
@@ -123,13 +108,6 @@ func RenderDevRayCluster(workspace domain.DevWorkspace, options WorkspaceRenderO
 		delete(head["template"].(map[string]any)["spec"].(map[string]any), "serviceAccountName")
 	}
 	workerVolumes := append([]any(nil), volumesForPlan...)
-	if options.PersonalStorageClaim != "" {
-		if !isDNSLabel(options.PersonalStorageClaim) {
-			return nil, fmt.Errorf("personal storage claim is invalid")
-		}
-		workerVolumes = append(workerVolumes, map[string]any{"name": "wellspiking-personal", "persistentVolumeClaim": map[string]any{"claimName": options.PersonalStorageClaim}})
-		workerMounts = append(workerMounts, map[string]any{"name": "wellspiking-personal", "mountPath": domain.WellspikingPersonalMountPath, "readOnly": false})
-	}
 	worker := map[string]any{
 		"groupName": "dev-workers", "replicas": int64(1), "minReplicas": int64(1), "maxReplicas": int64(1),
 		"rayStartParams": map[string]any{"num-gpus": strconv.Itoa(workspace.GPUCount)},
